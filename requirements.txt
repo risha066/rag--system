@@ -14,3 +14,4 @@ sentence-transformers==3.1.1
 numpy==1.26.4
 python-dotenv==1.0.1
 email-validator
+openai
