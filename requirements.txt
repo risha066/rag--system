@@ -16,3 +16,4 @@ python-docx
 sentence-transformers
 numpy
 groq
+pgvector
