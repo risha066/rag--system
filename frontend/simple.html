@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MyAI Assistant</title>
+    <style>
+        body { font-family: Arial; max-width: 500px; margin: 50px auto; padding: 20px; }
+        input, button { padding: 10px; margin: 5px 0; width: 100%; }
+        button { background: #7c3aed; color: white; border: none; cursor: pointer; }
+        .hidden { display: none; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+
+<h1>🧠 MyAI Assistant</h1>
+
+<div id="loginDiv">
+    <h3>Login</h3>
+    <input type="email" id="email" value="newuser@email.com" placeholder="Email">
+    <input type="password" id="password" value="securepass123" placeholder="Password">
+    <button onclick="login()">Login</button>
+    <p id="msg"></p>
+</div>
+
+<div id="appDiv" class="hidden">
+    <h3>✅ Logged in!</h3>
+    <p>Chat with your documents</p>
+    <input type="text" id="question" placeholder="Ask a question...">
+    <button onclick="ask()">Ask</button>
+    <div id="answer"></div>
+    <br>
+    <button onclick="logout()" style="background:red;">Logout</button>
+</div>
+
+<script>
+    const API = 'https://incredible-intuition-production-a491.up.railway.app';
+    let token = localStorage.getItem('token');
+
+    if (token) {
+        document.getElementById('loginDiv').classList.add('hidden');
+        document.getElementById('appDiv').classList.remove('hidden');
+    }
+
+    async function login() {
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        const msg = document.getElementById('msg');
+
+        try {
+            const fd = new URLSearchParams();
+            fd.append('username', email);
+            fd.append('password', password);
+
+            const res = await fetch(API + '/auth/login', { method: 'POST', body: fd });
+            const data = await res.json();
+
+            if (res.ok) {
+                token = data.access_token;
+                localStorage.setItem('token', token);
+                msg.innerHTML = '<span class="success">✅ Login successful!</span>';
+                setTimeout(() => {
+                    document.getElementById('loginDiv').classList.add('hidden');
+                    document.getElementById('appDiv').classList.remove('hidden');
+                }, 500);
+            } else {
+                msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Login failed') + '</span>';
+            }
+        } catch(e) {
+            msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
+        }
+    }
+
+    async function ask() {
+        const question = document.getElementById('question').value;
+        const answerDiv = document.getElementById('answer');
+        if (!question) return;
+
+        answerDiv.innerHTML = '⏳ Thinking...';
+
+        try {
+            const res = await fetch(API + '/query', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question })
+            });
+            const data = await res.json();
+            answerDiv.innerHTML = '📝 ' + (data.answer || 'No answer');
+        } catch(e) {
+            answerDiv.innerHTML = '❌ ' + e.message;
+        }
+    }
+
+    function logout() {
+        localStorage.removeItem('token');
+        location.reload();
+    }
+</script>
+
+</body>
+</html>
