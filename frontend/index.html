@@ -100,9 +100,12 @@
 </div>
 
 <script>
-    const API = 'http://localhost:8000';
+    // ==================== RAILWAY BACKEND URL ====================
+    const API = 'https://incredible-intuition-production-a491.up.railway.app';
+    
     let token = localStorage.getItem('token');
 
+    // ==================== AUTH ====================
     function showRegister() {
         document.getElementById('loginForm').classList.add('hidden');
         document.getElementById('registerForm').classList.remove('hidden');
@@ -331,7 +334,35 @@
     }
 
     function exportDoc(docId) {
-        window.open(API + '/export/' + docId + '?format=txt', '_blank');
+        const token = localStorage.getItem('token');
+        if (!token) {
+            alert('Please login again');
+            return;
+        }
+        fetch(API + '/export/' + docId + '?format=txt', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        })
+        .then(function(res) {
+            if (!res.ok) {
+                return res.json().then(function(err) {
+                    throw new Error(err.detail || 'Export failed');
+                });
+            }
+            return res.blob();
+        })
+        .then(function(blob) {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = docId + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        })
+        .catch(function(e) {
+            alert('Export error: ' + e.message);
+        });
     }
 
     function deleteDoc(docId) {
