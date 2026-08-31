@@ -8,6 +8,16 @@ from .auth import get_current_user
 from .models import User, Document, Chunk
 from .graph_db import get_all_entities
 from .llm_service import _chat
+import os
+import sys
+
+# Skip database initialization if running on Railway without databases
+if os.environ.get("RAILWAY_ENVIRONMENT"):
+    print("Running on Railway - skipping local database connections")
+    # Don't initialize databases
+else:
+    # Your existing init_db code
+    pass
 
 app = FastAPI(title="Knowledge Graph RAG API")
 
