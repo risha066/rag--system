@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MyAI Assistant</title>
+    <style>
+        body {
+            font-family: Arial;
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f0f4ff;
+        }
+        input,
+        button,
+        textarea {
+            padding: 10px;
+            margin: 5px 0;
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-size: 14px;
+        }
+        button {
+            background: #7c3aed;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #6d28d9;
+        }
+        .hidden {
+            display: none;
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+        h2 {
+            text-align: center;
+        }
+        #msg,
+        #ingestMsg,
+        #answer {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 8px;
+            background: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>🧠 MyAI Assistant</h2>
+
+    <div id="loginDiv">
+        <input type="email" id="email" placeholder="Email">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="register()">Register</button>
+        <button onclick="login()">Login</button>
+        <div id="msg"></div>
+    </div>
+
+    <div id="appDiv" class="hidden">
+        <h3>✅ Logged in!</h3>
+        <textarea id="docText" rows="4" placeholder="Paste your document text here..."></textarea>
+        <button onclick="ingest()">Ingest Document</button>
+        <div id="ingestMsg"></div>
+        <hr>
+        <input type="text" id="question" placeholder="Ask a question...">
+        <button onclick="ask()">Ask</button>
+        <div id="answer"></div>
+        <br>
+        <button onclick="logout()" style="background:red;">Logout</button>
+    </div>
+
+    <script>
+        // ==================== BACKEND URL ====================
+        const API = 'https://incredible-intuition-production-a491.up.railway.app';
+        let token = localStorage.getItem('token');
+
+        if (token) {
+            showApp();
+        }
+
+        // ==================== REGISTER ====================
+        async function register() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const msg = document.getElementById('msg');
+
+            if (!email || !password) {
+                msg.innerHTML = '<span class="error">Please enter email and password</span>';
+                return;
+            }
+
+            msg.innerHTML = '⏳ Registering...';
+
+            try {
+                const res = await fetch(API + '/auth/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    msg.innerHTML = '<span class="success">✅ Registered successfully! Now login.</span>';
+                } else {
+                    msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Registration failed') + '</span>';
+                }
+            } catch (e) {
+                msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
+            }
+        }
+
+        // ==================== LOGIN ====================
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const msg = document.getElementById('msg');
+
+            if (!email || !password) {
+                msg.innerHTML = '<span class="error">Please enter email and password</span>';
+                return;
+            }
+
+            msg.innerHTML = '⏳ Logging in...';
+
+            try {
+                const fd = new URLSearchParams();
+                fd.append('username', email);
+                fd.append('password', password);
+
+                const res = await fetch(API + '/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Accept': 'application/json'
+                    },
+                    body: fd
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    token = data.access_token;
+                    localStorage.setItem('token', token);
+                    localStorage.setItem('user', email);
+                    msg.innerHTML = '<span class="success">✅ Login successful!</span>';
+                    setTimeout(showApp, 500);
+                } else {
+                    msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Login failed') + '</span>';
+                }
+            } catch (e) {
+                msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
+            }
+        }
+
+        // ==================== SHOW APP ====================
+        function showApp() {
+            document.getElementById('loginDiv').classList.add('hidden');
+            document.getElementById('appDiv').classList.remove('hidden');
+        }
+
+        // ==================== LOGOUT ====================
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            location.reload();
+        }
+
+        // ==================== INGEST ====================
+        async function ingest() {
+            const text = document.getElementById('docText').value;
+            const msg = document.getElementById('ingestMsg');
+
+            if (!text) {
+                msg.innerHTML = '<span class="error">Please enter text</span>';
+                return;
+            }
+
+            msg.innerHTML = '⏳ Ingesting...';
+
+            try {
+                const res = await fetch(API + '/ingest', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        document_id: 'doc_' + Date.now(),
+                        title: 'Test Document',
+                        text: text
+                    })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    msg.innerHTML = '<span class="success">✅ ' + (data.status || 'Ingested!') + ' (' + (data.chunks || 0) + ' chunks)</span>';
+                } else {
+                    msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Ingest failed') + '</span>';
+                }
+            } catch (e) {
+                msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
+            }
+        }
+
+        // ==================== ASK ====================
+        async function ask() {
+            const question = document.getElementById('question').value;
+            const answerDiv = document.getElementById('answer');
+
+            if (!question) {
+                answerDiv.innerHTML = '<span class="error">Please enter a question</span>';
+                return;
+            }
+
+            answerDiv.innerHTML = '⏳ Thinking...';
+
+            try {
+                const res = await fetch(API + '/query', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ question })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    answerDiv.innerHTML = '📝 ' + (data.answer || 'No answer found');
+                } else {
+                    answerDiv.innerHTML = '<span class="error">❌ ' + (data.detail || 'Query failed') + '</span>';
+                }
+            } catch (e) {
+                answerDiv.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
+            }
+        }
+    </script>
+
+</body>
+</html>
