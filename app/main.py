@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -9,9 +11,15 @@ from pydantic import BaseModel
 import os
 
 # ==================== CONFIG ====================
-SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key")
+SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-this")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# ==================== DATABASE (SQLite - no PostgreSQL needed) ====================
+DATABASE_URL = "sqlite:///./rag.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 # ==================== PASSWORD HASHING ====================
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -30,22 +38,6 @@ def create_access_token(data: dict):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 # ==================== MODELS ====================
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, JSON
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-import datetime as dt
-
-# Use SQLite for simplicity (works on Railway)
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rag.db")
-if DATABASE_URL.startswith("postgresql"):
-    import psycopg2
-    engine = create_engine(DATABASE_URL)
-else:
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -57,7 +49,7 @@ class Document(Base):
     id = Column(String, primary_key=True, index=True)
     title = Column(String)
     owner_id = Column(Integer)
-    created_at = Column(DateTime, default=dt.datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class Chunk(Base):
     __tablename__ = "chunks"
@@ -79,14 +71,6 @@ def get_db():
 class UserCreate(BaseModel):
     email: str
     password: str
-
-class UserLogin(BaseModel):
-    email: str
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
 
 class IngestRequest(BaseModel):
     document_id: str
@@ -137,7 +121,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 @app.post("/ingest")
 def ingest(req: IngestRequest, db: Session = Depends(get_db)):
-    # Simple ingest - just store the text
     doc = db.query(Document).filter(Document.id == req.document_id).first()
     if not doc:
         doc = Document(id=req.document_id, title=req.title, owner_id=1)
@@ -151,10 +134,11 @@ def ingest(req: IngestRequest, db: Session = Depends(get_db)):
 
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
-    # Simple query - just return a response
     chunks = db.query(Chunk).all()
+    if not chunks:
+        return {"answer": "No documents found. Please ingest some documents first."}
     context = "\n".join([c.text for c in chunks[:3]])
-    return {"answer": f"Based on your documents: {context[:200]}..." if context else "No documents found. Please ingest some documents first."}
+    return {"answer": f"Based on your documents:\n\n{context[:500]}..."}
 
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
@@ -169,3 +153,12 @@ def get_chunks(db: Session = Depends(get_db)):
 @app.get("/entities")
 def get_entities():
     return []
+
+@app.get("/search")
+def search(q: str, db: Session = Depends(get_db)):
+    chunks = db.query(Chunk).all()
+    results = []
+    for chunk in chunks:
+        if q.lower() in chunk.text.lower():
+            results.append({"chunk_id": chunk.id, "document_id": chunk.document_id, "text": chunk.text[:200]})
+    return {"results": results[:10], "total": len(results)}
