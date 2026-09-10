@@ -104,7 +104,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def ingest(req: IngestRequest, db: Session = Depends(get_db)):
     if not db.query(Document).filter(Document.id == req.document_id).first():
         db.add(Document(id=req.document_id, title=req.title, owner_id=1)); db.commit()
-    db.add(Chunk(id=f"{req.document_id}_0", document_id=req.document_id, text=req.text))
+    db.add(Chunk(id=f"{req.document_id}_{datetime.utcnow().timestamp()}", document_id=req.document_id, text=req.text))
     db.commit()
     return {"status": "ingested", "chunks": 1, "document_id": req.document_id}
 
