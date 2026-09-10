@@ -21,14 +21,10 @@ body{font-family:Arial,sans-serif;background:#f0f4ff;min-height:100vh;display:fl
 .btn{padding:10px 20px;background:#7c3aed;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px}
 .btn:hover{background:#6d28d9}
 .btn-sm{padding:4px 12px;font-size:12px}
-.btn-green{background:#2ecc71}.btn-green:hover{background:#27ae60}
-.btn-blue{background:#3498db}.btn-blue:hover{background:#2980b9}
 .btn-red{background:#e74c3c}.btn-red:hover{background:#c0392b}
 .btn-full{width:100%}
 .doc-list{list-style:none}
 .doc-list li{background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-.doc-actions{display:flex;gap:5px;flex-wrap:wrap}
-.doc-actions .btn{padding:4px 10px;font-size:11px}
 .chat-box{background:#f8f9fa;border-radius:12px;padding:16px;height:250px;overflow-y:auto;margin-bottom:12px}
 .chat-msg{padding:8px 14px;border-radius:12px;margin-bottom:8px;max-width:80%}
 .chat-msg.user{background:#7c3aed;color:#fff;margin-left:auto}
@@ -172,11 +168,29 @@ function loadDashboard(c){
 
 function loadIngest(c){
   c.innerHTML='<h2>📤 Ingest Document</h2>'+
+    '<div class="ingest-section"><h3>📁 Upload File</h3>'+
+    '<p style="color:#888;font-size:13px;margin-bottom:8px;">Supports: .txt, .pdf, .docx</p>'+
+    '<input type="file" id="fileInput" multiple accept=".txt,.pdf,.docx" style="margin-bottom:10px;padding:8px;">'+
+    '<button class="btn" onclick="uploadFile()">Upload</button>'+
+    '<div id="uploadStatus" class="mt-10"></div></div>'+
     '<div class="ingest-section"><h3>📝 Paste Text</h3>'+
     '<div class="form-group"><label>Title</label><input type="text" id="docTitle" placeholder="Enter document title"></div>'+
     '<div class="form-group"><label>Content</label><textarea id="docText" rows="5" placeholder="Paste your text here..."></textarea></div>'+
     '<button class="btn" onclick="ingestText()">Ingest Text</button>'+
     '<div id="ingestStatus" class="mt-10"></div></div>';
+}
+
+function uploadFile(){
+  const input=document.getElementById('fileInput');
+  const status=document.getElementById('uploadStatus');
+  if(!input.files||!input.files.length){status.innerHTML='<span style="color:red;">Please select a file</span>';return;}
+  status.innerHTML='⏳ Uploading...';
+  const fd=new FormData();
+  for(let i=0;i<input.files.length;i++){fd.append('file',input.files[i]);}
+  fetch(API+'/upload/upload',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('kg_token')},body:fd})
+    .then(res=>res.json().then(d=>({ok:res.ok,d})))
+    .then(({ok,d})=>{ if(ok){status.innerHTML='<span style="color:green;">✅ '+(d.message||'Uploaded!')+'</span>';input.value='';} else {status.innerHTML='<span style="color:red;">❌ '+(d.detail||'Upload failed')+'</span>';} })
+    .catch(e=>{status.innerHTML='<span style="color:red;">❌ '+e.message+'</span>';});
 }
 
 function ingestText(){
@@ -223,7 +237,7 @@ function loadDocuments(c){
   apiCall('/documents').then(docs=>{
     if(!docs||docs.length===0){ c.innerHTML='<h2>📁 Documents</h2><p style="color:#888;">No documents found. <a onclick="showPage(\'ingest\')" style="color:#7c3aed;cursor:pointer;">Ingest your first document</a></p>'; return; }
     let html='<h2>📁 Documents ('+docs.length+')</h2><ul class="doc-list">';
-    docs.forEach(d=>{ html+='<li><div><strong>'+(d.title||d.id)+'</strong><span style="color:#888;font-size:12px;display:block;">ID: '+d.id+'</span></div><div class="doc-actions"><button class="btn btn-sm btn-red" onclick="deleteDoc(\''+d.id+'\')">🗑️ Delete</button></div></li>'; });
+    docs.forEach(d=>{ html+='<li><div><strong>'+(d.title||d.id)+'</strong><span style="color:#888;font-size:12px;display:block;">ID: '+d.id+'</span></div><div><button class="btn btn-sm btn-red" onclick="deleteDoc(\''+d.id+'\')">🗑️ Delete</button></div></li>'; });
     html+='</ul>'; c.innerHTML=html;
   }).catch(e=>{ c.innerHTML='<p style="color:red;">❌ '+e.message+'</p>'; });
 }
