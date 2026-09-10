@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
@@ -6,7 +6,17 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime, timedelta
 from jose import jwt
 from pydantic import BaseModel
-import hashlib, secrets, os
+import hashlib, secrets, os, io
+
+# Optional PDF/DOCX readers
+try:
+    import PyPDF2
+except Exception:
+    PyPDF2 = None
+try:
+    import docx
+except Exception:
+    docx = None
 
 SECRET_KEY = os.getenv("JWT_SECRET", "change-this")
 ALGORITHM = "HS256"
@@ -104,9 +114,55 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def ingest(req: IngestRequest, db: Session = Depends(get_db)):
     if not db.query(Document).filter(Document.id == req.document_id).first():
         db.add(Document(id=req.document_id, title=req.title, owner_id=1)); db.commit()
-    db.add(Chunk(id=f"{req.document_id}_{datetime.utcnow().timestamp()}", document_id=req.document_id, text=req.text))
+    db.add(Chunk(id=f"{req.document_id}_{datetime.utcnow().timestamp()}",
+                 document_id=req.document_id, text=req.text))
     db.commit()
     return {"status": "ingested", "chunks": 1, "document_id": req.document_id}
+
+# ---------- FILE UPLOAD ----------
+@app.post("/upload/upload")
+async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    filename = (file.filename or "upload").lower()
+    content_bytes = await file.read()
+    content = ""
+
+    try:
+        if filename.endswith(".txt"):
+            content = content_bytes.decode("utf-8", errors="ignore")
+        elif filename.endswith(".pdf"):
+            if PyPDF2 is None:
+                raise HTTPException(status_code=500, detail="PDF support not installed")
+            reader = PyPDF2.PdfReader(io.BytesIO(content_bytes))
+            for page in reader.pages:
+                content += (page.extract_text() or "") + "\n"
+        elif filename.endswith(".docx"):
+            if docx is None:
+                raise HTTPException(status_code=500, detail="DOCX support not installed")
+            d = docx.Document(io.BytesIO(content_bytes))
+            for para in d.paragraphs:
+                content += para.text + "\n"
+        else:
+            raise HTTPException(status_code=400, detail="Only .txt, .pdf, .docx allowed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Read error: {e}")
+
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="No text found in file")
+
+    doc_id = filename.replace(" ", "_").replace(".", "_")
+    if not db.query(Document).filter(Document.id == doc_id).first():
+        db.add(Document(id=doc_id, title=file.filename, owner_id=1)); db.commit()
+
+    # Simple chunking: 1000-char pieces
+    for i in range(0, len(content), 1000):
+        piece = content[i:i+1000]
+        db.add(Chunk(id=f"{doc_id}_{i}", document_id=doc_id, text=piece))
+    db.commit()
+
+    return {"message": f"{file.filename} uploaded", "document_id": doc_id,
+            "chunks": (len(content)//1000)+1}
 
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
