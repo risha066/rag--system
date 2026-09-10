@@ -1,13 +1,12 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime, timedelta
 from jose import jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel
-import os
+import hashlib, secrets, os
 
 # ================= CONFIG =================
 SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-this")
@@ -20,10 +19,16 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# ================= PASSWORD =================
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-def verify_password(plain, hashed): return pwd_context.verify(plain, hashed)
-def get_password_hash(p): return pwd_context.hash(p)
+# ================= PASSWORD (SHA256 - no bcrypt crash) =================
+def get_password_hash(password: str) -> str:
+    salt = secrets.token_hex(16)
+    return salt + ":" + hashlib.sha256((salt + password).encode()).hexdigest()
+
+def verify_password(plain: str, hashed: str) -> bool:
+    if ":" not in hashed:
+        return False
+    salt, h = hashed.split(":")
+    return h == hashlib.sha256((salt + plain).encode()).hexdigest()
 
 # ================= JWT =================
 def create_access_token(data: dict):
@@ -76,7 +81,6 @@ class QueryRequest(BaseModel):
 # ================= APP =================
 app = FastAPI(title="Knowledge Graph RAG API")
 
-# ================= CORS (THE FIX) =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -96,20 +100,33 @@ def health():
 
 @app.post("/auth/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == user.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    new_user = User(email=user.email, hashed_password=get_password_hash(user.password))
-    db.add(new_user)
-    db.commit()
-    return {"message": "User created", "email": user.email}
+    try:
+        existing = db.query(User).filter(User.email == user.email).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        new_user = User(email=user.email, hashed_password=get_password_hash(user.password))
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        return {"message": "User created", "email": user.email}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("REGISTER ERROR:", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/auth/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    return {"access_token": create_access_token({"sub": user.email}), "token_type": "bearer"}
+    try:
+        user = db.query(User).filter(User.email == form_data.username).first()
+        if not user or not verify_password(form_data.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        return {"access_token": create_access_token({"sub": user.email}), "token_type": "bearer"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("LOGIN ERROR:", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/ingest")
 def ingest(req: IngestRequest, db: Session = Depends(get_db)):
