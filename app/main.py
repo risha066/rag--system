@@ -15,7 +15,7 @@ SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-this")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# ==================== DATABASE (SQLite - no PostgreSQL needed) ====================
+# ==================== DATABASE (SQLite) ====================
 DATABASE_URL = "sqlite:///./rag.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -83,7 +83,6 @@ class QueryRequest(BaseModel):
 # ==================== APP ====================
 app = FastAPI(title="Knowledge Graph RAG API")
 
-# ==================== CORS FIX ====================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
