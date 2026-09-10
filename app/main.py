@@ -1,43 +1,37 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime, timedelta
-from jose import JWTError, jwt
+from jose import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 import os
 
-# ==================== CONFIG ====================
+# ================= CONFIG =================
 SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-this")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-# ==================== DATABASE (SQLite) ====================
+# ================= DATABASE =================
 DATABASE_URL = "sqlite:///./rag.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# ==================== PASSWORD HASHING ====================
+# ================= PASSWORD =================
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+def verify_password(plain, hashed): return pwd_context.verify(plain, hashed)
+def get_password_hash(p): return pwd_context.hash(p)
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-# ==================== JWT ====================
+# ================= JWT =================
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# ==================== MODELS ====================
+# ================= MODELS =================
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -56,7 +50,6 @@ class Chunk(Base):
     id = Column(String, primary_key=True, index=True)
     document_id = Column(String)
     text = Column(Text)
-    embedding = Column(JSON, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -67,7 +60,7 @@ def get_db():
     finally:
         db.close()
 
-# ==================== SCHEMAS ====================
+# ================= SCHEMAS =================
 class UserCreate(BaseModel):
     email: str
     password: str
@@ -80,18 +73,19 @@ class IngestRequest(BaseModel):
 class QueryRequest(BaseModel):
     question: str
 
-# ==================== APP ====================
+# ================= APP =================
 app = FastAPI(title="Knowledge Graph RAG API")
 
+# ================= CORS (THE FIX) =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==================== ROUTES ====================
+# ================= ROUTES =================
 @app.get("/")
 def root():
     return {"message": "RAG System API is running!"}
@@ -105,11 +99,9 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == user.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    hashed = get_password_hash(user.password)
-    new_user = User(email=user.email, hashed_password=hashed)
+    new_user = User(email=user.email, hashed_password=get_password_hash(user.password))
     db.add(new_user)
     db.commit()
-    db.refresh(new_user)
     return {"message": "User created", "email": user.email}
 
 @app.post("/auth/login")
@@ -117,19 +109,14 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token({"sub": user.email})
-    return {"access_token": token, "token_type": "bearer"}
+    return {"access_token": create_access_token({"sub": user.email}), "token_type": "bearer"}
 
 @app.post("/ingest")
 def ingest(req: IngestRequest, db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == req.document_id).first()
-    if not doc:
-        doc = Document(id=req.document_id, title=req.title, owner_id=1)
-        db.add(doc)
+    if not db.query(Document).filter(Document.id == req.document_id).first():
+        db.add(Document(id=req.document_id, title=req.title, owner_id=1))
         db.commit()
-    
-    chunk = Chunk(id=f"{req.document_id}_0", document_id=req.document_id, text=req.text)
-    db.add(chunk)
+    db.add(Chunk(id=f"{req.document_id}_0", document_id=req.document_id, text=req.text))
     db.commit()
     return {"status": "ingested", "chunks": 1, "document_id": req.document_id}
 
@@ -143,13 +130,11 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
 
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
-    docs = db.query(Document).all()
-    return [{"id": d.id, "title": d.title} for d in docs]
+    return [{"id": d.id, "title": d.title} for d in db.query(Document).all()]
 
 @app.get("/chunks")
 def get_chunks(db: Session = Depends(get_db)):
-    chunks = db.query(Chunk).all()
-    return [{"id": c.id, "document_id": c.document_id} for c in chunks]
+    return [{"id": c.id, "document_id": c.document_id} for c in db.query(Chunk).all()]
 
 @app.get("/entities")
 def get_entities():
@@ -157,9 +142,8 @@ def get_entities():
 
 @app.get("/search")
 def search(q: str, db: Session = Depends(get_db)):
-    chunks = db.query(Chunk).all()
     results = []
-    for chunk in chunks:
-        if q.lower() in chunk.text.lower():
-            results.append({"chunk_id": chunk.id, "document_id": chunk.document_id, "text": chunk.text[:200]})
+    for c in db.query(Chunk).all():
+        if q.lower() in c.text.lower():
+            results.append({"chunk_id": c.id, "document_id": c.document_id, "text": c.text[:200]})
     return {"results": results[:10], "total": len(results)}
