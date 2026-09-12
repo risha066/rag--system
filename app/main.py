@@ -170,25 +170,27 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
     keywords = [w for w in q.split() if len(w) > 3]
 
     chunks = db.query(Chunk).all()
+    if not chunks:
+        return {"answer": "No documents found. Please ingest some documents first."}
 
-    # Score chunks by how many keywords they contain
+    # Score each chunk by how many keywords from the question it contains
     scored = []
     for c in chunks:
         text_lower = c.text.lower()
         score = sum(1 for kw in keywords if kw in text_lower)
-        if score > 0:
-            scored.append((score, c))
+        scored.append((score, c))
 
     scored.sort(key=lambda x: -x[0])
-    top = [c.text for _, c in scored[:3]]
+    best_score = scored[0][0] if scored else 0
 
-    if not top:
-        # nothing matched — fall back to a plain reply
-        return {"answer": "I couldn't find anything about that in your documents. Try uploading a document that mentions it."}
+    if best_score == 0:
+        # Nothing matched — fall back to the first chunks so it's not blank
+        top = [c.text for _, c in scored[:3]]
+        return {"answer": "No exact match found. Here is content from your documents:\n\n" + "\n\n".join(top)[:800]}
 
+    top = [c.text for score, c in scored[:3] if score > 0]
     context = "\n\n---\n\n".join(top)
     return {"answer": f"Based on your documents:\n\n{context[:800]}"}
-
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
     return [{"id": d.id, "title": d.title} for d in db.query(Document).all()]
