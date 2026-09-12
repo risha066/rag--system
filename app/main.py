@@ -116,7 +116,7 @@ def bm25_score(query_terms, doc_terms, avg_len, N, df):
     return score
 
 def smart_search(db: Session, question: str, top_k: int = 3):
-    """BM25-ish keyword search across chunks. Returns best chunks."""
+    """Score chunks by keyword match + definition bonus + title bonus."""
     chunks = db.query(Chunk).all()
     if not chunks:
         return []
@@ -133,9 +133,41 @@ def smart_search(db: Session, question: str, top_k: int = 3):
         for t in set(terms):
             df[t] += 1
 
+    # Definition phrases we care about
+    DEF_PHRASES = [
+        " is a ", " is an ", " is the ", " refers to ", " means ",
+        " is defined as ", " is called ", " can be defined as ",
+        " is known as ", " is considered "
+    ]
+
     scored = []
     for c, terms in zip(chunks, docs_tokens):
+        # 1) Base BM25 score
         s = bm25_score(query_terms, terms, avg_len, N, df)
+
+        # 2) Title bonus: chunk's document title contains a query term
+        title = (c.title or c.document_id or "").lower()
+        title_hits = sum(1 for t in query_terms if t in title)
+        s += title_hits * 3.0
+
+        # 3) Definition bonus: chunk contains "X is a/an ..." for a query term
+        text_lower = " " + c.text.lower() + " "
+        for term in query_terms:
+            for phrase in DEF_PHRASES:
+                if f" {term} {phrase.strip()} " in text_lower or f"{term}{phrase}" in text_lower:
+                    s += 4.0
+                    break
+            # also "X <verb> definition"
+            if f"{term} is" in text_lower:
+                s += 1.5
+
+        # 4) Length sweet spot: 300-1500 chars get a small boost
+        L = len(c.text)
+        if 300 <= L <= 1500:
+            s += 1.0
+        elif L < 100:
+            s -= 1.0
+
         scored.append((s, c))
 
     scored.sort(key=lambda x: -x[0])
