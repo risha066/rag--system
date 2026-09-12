@@ -1,15 +1,14 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime, timedelta
 from jose import jwt
 from pydantic import BaseModel
-import hashlib, secrets, os, io, math, re
-from collections import Counter
+import hashlib, secrets, os, io, math, json, re
+import numpy as np
 
-# Optional PDF/DOCX
 try:
     import PyPDF2
 except Exception:
@@ -18,6 +17,19 @@ try:
     import docx
 except Exception:
     docx = None
+
+# ---- Groq client (optional) ----
+try:
+    from groq import Groq
+    GROQ_KEY = os.getenv("GROQ_API_KEY", "")
+    groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+except Exception:
+    groq_client = None
+
+# ---- Embeddings (local, free) ----
+from sentence_transformers import SentenceTransformer
+EMBED_MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+EMBED_DIM = 384
 
 SECRET_KEY = os.getenv("JWT_SECRET", "change-this")
 ALGORITHM = "HS256"
@@ -28,7 +40,7 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# ================= PASSWORD =================
+# ================= AUTH =================
 def get_password_hash(p):
     salt = secrets.token_hex(16)
     return salt + ":" + hashlib.sha256((salt + p).encode()).hexdigest()
@@ -61,8 +73,9 @@ class Chunk(Base):
     __tablename__ = "chunks"
     id = Column(String, primary_key=True, index=True)
     document_id = Column(String)
-    title = Column(String)               # <-- store doc title on chunk
+    title = Column(String)
     text = Column(Text)
+    embedding = Column(JSON)          # list of 384 floats
 
 Base.metadata.create_all(bind=engine)
 
@@ -95,83 +108,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================= TEXT UTILS (BM25-lite search) =================
-STOPWORDS = set("""a an the is are was were be been being of to in on for with and or
-not but if then so as at by from this that these those it its i you he she we they
-what which who whom how why when where do does did can could should would will""".split())
+# ================= EMBEDDING HELPERS =================
+def embed(text: str):
+    vec = EMBED_MODEL.encode([text], normalize_embeddings=True)[0]
+    return vec.tolist()
 
-def tokenize(text: str):
-    words = re.findall(r"[a-z0-9]+", text.lower())
-    return [w for w in words if w not in STOPWORDS and len(w) > 2]
+def embed_batch(texts):
+    vecs = EMBED_MODEL.encode(texts, normalize_embeddings=True, batch_size=16)
+    return [v.tolist() for v in vecs]
 
-def bm25_score(query_terms, doc_terms, avg_len, N, df):
-    k1, b = 1.5, 0.75
-    score = 0.0
-    L = len(doc_terms)
-    for term in query_terms:
-        f = doc_terms.count(term)
-        if f == 0: continue
-        idf = math.log((N - df.get(term, 0) + 0.5) / (df.get(term, 0) + 0.5) + 1)
-        score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * L / avg_len))
-    return score
+def cosine(a, b):
+    a = np.array(a); b = np.array(b)
+    return float(np.dot(a, b))   # already normalized
 
-def smart_search(db: Session, question: str, top_k: int = 3):
-    """Score chunks by keyword match + definition bonus + title bonus."""
-    chunks = db.query(Chunk).all()
+def semantic_search(db: Session, question: str, top_k: int = 5):
+    chunks = db.query(Chunk).filter(Chunk.embedding.isnot(None)).all()
     if not chunks:
         return []
-
-    query_terms = tokenize(question)
-    if not query_terms:
-        return chunks[:top_k]
-
-    docs_tokens = [tokenize(c.text) for c in chunks]
-    N = len(chunks)
-    avg_len = sum(len(t) for t in docs_tokens) / N
-    df = Counter()
-    for terms in docs_tokens:
-        for t in set(terms):
-            df[t] += 1
-
-    # Definition phrases we care about
-    DEF_PHRASES = [
-        " is a ", " is an ", " is the ", " refers to ", " means ",
-        " is defined as ", " is called ", " can be defined as ",
-        " is known as ", " is considered "
-    ]
-
+    q_vec = embed(question)
     scored = []
-    for c, terms in zip(chunks, docs_tokens):
-        # 1) Base BM25 score
-        s = bm25_score(query_terms, terms, avg_len, N, df)
-
-        # 2) Title bonus: chunk's document title contains a query term
-        title = (c.title or c.document_id or "").lower()
-        title_hits = sum(1 for t in query_terms if t in title)
-        s += title_hits * 3.0
-
-        # 3) Definition bonus: chunk contains "X is a/an ..." for a query term
-        text_lower = " " + c.text.lower() + " "
-        for term in query_terms:
-            for phrase in DEF_PHRASES:
-                if f" {term} {phrase.strip()} " in text_lower or f"{term}{phrase}" in text_lower:
-                    s += 4.0
-                    break
-            # also "X <verb> definition"
-            if f"{term} is" in text_lower:
-                s += 1.5
-
-        # 4) Length sweet spot: 300-1500 chars get a small boost
-        L = len(c.text)
-        if 300 <= L <= 1500:
-            s += 1.0
-        elif L < 100:
-            s -= 1.0
-
-        scored.append((s, c))
-
+    for c in chunks:
+        try:
+            s = cosine(q_vec, c.embedding)
+            scored.append((s, c))
+        except Exception:
+            continue
     scored.sort(key=lambda x: -x[0])
-    return [c for s, c in scored[:top_k]]
+    return [c for _, c in scored[:top_k]]
+
+# ================= CHUNKING =================
+def chunk_text(text: str, size: int = 700, overlap: int = 100):
+    text = re.sub(r"\s+", " ", text).strip()
+    pieces, start = [], 0
+    while start < len(text):
+        end = start + size
+        pieces.append(text[start:end])
+        start = end - overlap
+    return [p for p in pieces if len(p.strip()) > 30]
 
 # ================= ROUTES =================
 @app.get("/")
@@ -201,122 +174,100 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def ingest(req: IngestRequest, db: Session = Depends(get_db)):
     if not db.query(Document).filter(Document.id == req.document_id).first():
         db.add(Document(id=req.document_id, title=req.title, owner_id=1)); db.commit()
-    # store with title on the chunk
-    db.add(Chunk(id=f"{req.document_id}_{datetime.utcnow().timestamp()}",
-                 document_id=req.document_id, title=req.title, text=req.text))
+
+    pieces = chunk_text(req.text)
+    if not pieces:
+        return {"status": "empty", "chunks": 0}
+
+    vecs = embed_batch(pieces)
+    for i, (piece, vec) in enumerate(zip(pieces, vecs)):
+        db.add(Chunk(id=f"{req.document_id}_{i}", document_id=req.document_id,
+                     title=req.title, text=piece, embedding=vec))
     db.commit()
-    return {"status": "ingested", "chunks": 1, "document_id": req.document_id}
+    return {"status": "ingested", "chunks": len(pieces), "document_id": req.document_id}
 
 @app.post("/upload/upload")
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    filename = (file.filename or "upload").lower()
+    filename = (file.filename or "upload")
+    fl = filename.lower()
     content_bytes = await file.read()
     content = ""
 
     try:
-        if filename.endswith(".txt"):
+        if fl.endswith(".txt"):
             content = content_bytes.decode("utf-8", errors="ignore")
-        elif filename.endswith(".pdf"):
-            if PyPDF2 is None:
-                raise HTTPException(status_code=500, detail="PDF support not installed")
+        elif fl.endswith(".pdf"):
+            if PyPDF2 is None: raise HTTPException(500, "PDF support not installed")
             reader = PyPDF2.PdfReader(io.BytesIO(content_bytes))
             for page in reader.pages:
                 content += (page.extract_text() or "") + "\n"
-        elif filename.endswith(".docx"):
-            if docx is None:
-                raise HTTPException(status_code=500, detail="DOCX support not installed")
+        elif fl.endswith(".docx"):
+            if docx is None: raise HTTPException(500, "DOCX support not installed")
             d = docx.Document(io.BytesIO(content_bytes))
             for para in d.paragraphs:
                 content += para.text + "\n"
         else:
-            raise HTTPException(status_code=400, detail="Only .txt, .pdf, .docx allowed")
+            raise HTTPException(400, "Only .txt, .pdf, .docx allowed")
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Read error: {e}")
+        raise HTTPException(500, f"Read error: {e}")
 
     if not content.strip():
-        raise HTTPException(status_code=400, detail="No text found in file")
+        raise HTTPException(400, "No text found in file")
 
-    doc_id = filename.replace(" ", "_").replace(".", "_")
+    doc_id = re.sub(r"[^a-z0-9]+", "_", fl).strip("_")
     if not db.query(Document).filter(Document.id == doc_id).first():
-        db.add(Document(id=doc_id, title=file.filename, owner_id=1)); db.commit()
+        db.add(Document(id=doc_id, title=filename, owner_id=1)); db.commit()
 
-    chunk_size = 800
-    n = 0
-    for i in range(0, len(content), chunk_size):
-        piece = content[i:i+chunk_size]
-        db.add(Chunk(id=f"{doc_id}_{i}", document_id=doc_id, title=file.filename, text=piece))
-        n += 1
+    pieces = chunk_text(content)
+    vecs = embed_batch(pieces)
+    for i, (piece, vec) in enumerate(zip(pieces, vecs)):
+        db.add(Chunk(id=f"{doc_id}_{i}", document_id=doc_id,
+                     title=filename, text=piece, embedding=vec))
     db.commit()
-
-    return {"message": f"{file.filename} uploaded", "document_id": doc_id, "chunks": n}
-
-def extract_key_points(text: str, max_points: int = 5):
-    """Pick the most informative sentences as key points."""
-    # split into sentences
-    sents = re.split(r"(?<=[.!?])\s+", text.strip())
-    sents = [s.strip() for s in sents if len(s.strip()) > 40]
-    if not sents:
-        return []
-    # score sentences by rare-word density
-    all_words = []
-    for s in sents:
-        all_words.extend(tokenize(s))
-    freq = Counter(all_words)
-    scored = []
-    for s in sents:
-        words = tokenize(s)
-        if not words: continue
-        score = sum(freq[w] for w in words) / len(words)
-        scored.append((score, s))
-    scored.sort(key=lambda x: -x[0])
-    # return top N unique
-    picked, seen = [], set()
-    for _, s in scored:
-        key = s[:60]
-        if key in seen: continue
-        seen.add(key)
-        picked.append(s)
-        if len(picked) >= max_points: break
-    return picked
-
+    return {"message": f"{filename} uploaded", "document_id": doc_id, "chunks": len(pieces)}
 
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
-    top = smart_search(db, req.question, top_k=5)
-    if not top:
+    chunks = semantic_search(db, req.question, top_k=5)
+    if not chunks:
         return {"answer": "No documents found. Please ingest some documents first."}
 
-    # ---------- KEY POINTS ----------
-    merged_text = " ".join(c.text for c in top)
-    key_points = extract_key_points(merged_text, max_points=5)
+    # Build context
+    context_parts = []
+    sources = []
+    for i, c in enumerate(chunks, 1):
+        context_parts.append(f"[Source {i} - {c.title or c.document_id}]\n{c.text}")
+        sources.append(c.title or c.document_id)
+    context = "\n\n".join(context_parts)
+    unique_sources = list(dict.fromkeys(sources))
 
-    # ---------- GROUP BY SOURCE ----------
-    by_doc = {}
-    for c in top:
-        title = c.title or c.document_id
-        by_doc.setdefault(title, []).append(c.text.strip())
+    # If Groq is available -> real answer
+    if groq_client:
+        system = (
+            "You are a precise assistant. Answer the user's question using ONLY the "
+            "context provided. Be accurate and concise. If the answer isn't in the "
+            "context, say 'I couldn't find that in your documents.'"
+        )
+        user = f"Context:\n{context}\n\nQuestion: {req.question}\n\nAnswer:"
+        try:
+            resp = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role":"system","content":system},
+                          {"role":"user","content":user}],
+                temperature=0.2,
+                max_tokens=600,
+            )
+            answer = resp.choices[0].message.content.strip()
+            answer += f"\n\n📚 Sources: {', '.join(unique_sources)}"
+            return {"answer": answer}
+        except Exception as e:
+            # fall through to raw context if Groq fails
+            return {"answer": f"(Groq error: {e})\n\nTop matches from your documents:\n\n{context[:1200]}"}
 
-    # ---------- BUILD ANSWER ----------
-    lines = []
-    lines.append(f"🔎 Question: {req.question}")
-    lines.append("")
-
-    if key_points:
-        lines.append("### ⭐ Key Points")
-        for kp in key_points:
-            lines.append(f"• {kp}")
-        lines.append("")
-
-    lines.append("### 📚 Full Context by Source")
-    for title, pieces in by_doc.items():
-        lines.append("")
-        lines.append(f"📄 **{title}**")
-        joined = "\n\n".join(pieces)
-        lines.append(joined[:1500])
-
-    return {"answer": "\n".join(lines)}
+    # No Groq -> return best matching chunks
+    return {"answer": f"Top matches for your question:\n\n{context[:1500]}"}
 
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
@@ -331,6 +282,7 @@ def get_entities(): return []
 
 @app.get("/search")
 def search(q: str, db: Session = Depends(get_db)):
-    top = smart_search(db, q, top_k=5)
-    results = [{"chunk_id": c.id, "document_id": c.document_id, "title": c.title, "text": c.text[:250]} for c in top]
+    top = semantic_search(db, q, top_k=5)
+    results = [{"chunk_id": c.id, "document_id": c.document_id,
+                "title": c.title, "text": c.text[:250]} for c in top]
     return {"results": results, "total": len(results)}
