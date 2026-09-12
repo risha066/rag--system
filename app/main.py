@@ -75,7 +75,7 @@ class Chunk(Base):
     document_id = Column(String)
     title = Column(String)
     text = Column(Text)
-    embedding = Column(JSON)          # list of 384 floats
+    embedding = Column(JSON)
 
 Base.metadata.create_all(bind=engine)
 
@@ -119,7 +119,7 @@ def embed_batch(texts):
 
 def cosine(a, b):
     a = np.array(a); b = np.array(b)
-    return float(np.dot(a, b))   # already normalized
+    return float(np.dot(a, b))
 
 def semantic_search(db: Session, question: str, top_k: int = 5):
     chunks = db.query(Chunk).filter(Chunk.embedding.isnot(None)).all()
@@ -144,7 +144,7 @@ def chunk_text(text: str, size: int = 700, overlap: int = 100):
         end = start + size
         pieces.append(text[start:end])
         start = end - overlap
-    return [p for p in pieces if len(p.strip()) > 30]
+    return [p for p in pieces if len(p.strip()) > 3]
 
 # ================= ROUTES =================
 @app.get("/")
@@ -234,7 +234,6 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
     if not chunks:
         return {"answer": "No documents found. Please ingest some documents first."}
 
-    # Build context
     context_parts = []
     sources = []
     for i, c in enumerate(chunks, 1):
@@ -243,7 +242,6 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
     context = "\n\n".join(context_parts)
     unique_sources = list(dict.fromkeys(sources))
 
-    # If Groq is available -> real answer
     if groq_client:
         system = (
             "You are a precise assistant. Answer the user's question using ONLY the "
@@ -263,15 +261,21 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
             answer += f"\n\n📚 Sources: {', '.join(unique_sources)}"
             return {"answer": answer}
         except Exception as e:
-            # fall through to raw context if Groq fails
             return {"answer": f"(Groq error: {e})\n\nTop matches from your documents:\n\n{context[:1200]}"}
 
-    # No Groq -> return best matching chunks
     return {"answer": f"Top matches for your question:\n\n{context[:1500]}"}
 
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
     return [{"id": d.id, "title": d.title} for d in db.query(Document).all()]
+
+# ---------- DELETE DOCUMENT (NEW) ----------
+@app.delete("/documents/{doc_id}")
+def delete_document(doc_id: str, db: Session = Depends(get_db)):
+    db.query(Chunk).filter(Chunk.document_id == doc_id).delete()
+    db.query(Document).filter(Document.id == doc_id).delete()
+    db.commit()
+    return {"message": f"Deleted {doc_id}"}
 
 @app.get("/chunks")
 def get_chunks(db: Session = Depends(get_db)):
