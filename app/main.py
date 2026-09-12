@@ -220,19 +220,71 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 
     return {"message": f"{file.filename} uploaded", "document_id": doc_id, "chunks": n}
 
+def extract_key_points(text: str, max_points: int = 5):
+    """Pick the most informative sentences as key points."""
+    # split into sentences
+    sents = re.split(r"(?<=[.!?])\s+", text.strip())
+    sents = [s.strip() for s in sents if len(s.strip()) > 40]
+    if not sents:
+        return []
+    # score sentences by rare-word density
+    all_words = []
+    for s in sents:
+        all_words.extend(tokenize(s))
+    freq = Counter(all_words)
+    scored = []
+    for s in sents:
+        words = tokenize(s)
+        if not words: continue
+        score = sum(freq[w] for w in words) / len(words)
+        scored.append((score, s))
+    scored.sort(key=lambda x: -x[0])
+    # return top N unique
+    picked, seen = [], set()
+    for _, s in scored:
+        key = s[:60]
+        if key in seen: continue
+        seen.add(key)
+        picked.append(s)
+        if len(picked) >= max_points: break
+    return picked
+
+
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
-    top = smart_search(db, req.question, top_k=3)
+    top = smart_search(db, req.question, top_k=5)
     if not top:
         return {"answer": "No documents found. Please ingest some documents first."}
 
-    parts = []
+    # ---------- KEY POINTS ----------
+    merged_text = " ".join(c.text for c in top)
+    key_points = extract_key_points(merged_text, max_points=5)
+
+    # ---------- GROUP BY SOURCE ----------
+    by_doc = {}
     for c in top:
         title = c.title or c.document_id
-        parts.append(f"📄 [{title}]\n{c.text.strip()}")
+        by_doc.setdefault(title, []).append(c.text.strip())
 
-    context = "\n\n---\n\n".join(parts)
-    return {"answer": f"Here is what I found in your documents:\n\n{context[:1200]}"}
+    # ---------- BUILD ANSWER ----------
+    lines = []
+    lines.append(f"🔎 Question: {req.question}")
+    lines.append("")
+
+    if key_points:
+        lines.append("### ⭐ Key Points")
+        for kp in key_points:
+            lines.append(f"• {kp}")
+        lines.append("")
+
+    lines.append("### 📚 Full Context by Source")
+    for title, pieces in by_doc.items():
+        lines.append("")
+        lines.append(f"📄 **{title}**")
+        joined = "\n\n".join(pieces)
+        lines.append(joined[:1500])
+
+    return {"answer": "\n".join(lines)}
 
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
