@@ -147,7 +147,7 @@ def cosine(a, b):
         return 0.0
     return float(np.dot(a, b) / (na * nb))
 
-def semantic_search(db: Session, question: str, top_k: int = 7):
+def semantic_search(db: Session, question: str, top_k: int = 12):
     chunks = db.query(Chunk).filter(Chunk.embedding.isnot(None)).all()
     if not chunks:
         return []
@@ -159,7 +159,7 @@ def semantic_search(db: Session, question: str, top_k: int = 7):
             sim = cosine(q_vec, c.embedding)
             c_text_lower = (c.text or "").lower()
             keyword_matches = sum(1 for w in q_words if w in c_text_lower)
-            boost = (keyword_matches / max(len(q_words), 1)) * 0.35
+            boost = (keyword_matches / max(len(q_words), 1)) * 0.4
             scored.append((sim + boost, c))
         except Exception:
             continue
@@ -167,7 +167,7 @@ def semantic_search(db: Session, question: str, top_k: int = 7):
     return [c for _, c in scored[:top_k]]
 
 # ================= CHUNKING =================
-def chunk_text(text: str, size: int = 700, overlap: int = 100):
+def chunk_text(text: str, size: int = 1200, overlap: int = 200):
     text = re.sub(r"\s+", " ", text).strip()
     pieces, start = [], 0
     while start < len(text):
@@ -260,13 +260,35 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
-    chunks = semantic_search(db, req.question, top_k=5)
+    chunks = semantic_search(db, req.question, top_k=12)
     if not chunks:
         return {"answer": "No documents found. Please ingest some documents first."}
 
+    # Expand matched chunks with their direct adjacent chunks so multi-part lists are unbroken
+    matched_ids = {c.id for c in chunks}
+    all_chunks_to_use = list(chunks)
+    for c in chunks:
+        if "_" in (c.id or ""):
+            try:
+                prefix, idx_str = c.id.rsplit("_", 1)
+                idx = int(idx_str)
+                for neighbor_idx in [idx - 1, idx + 1]:
+                    if neighbor_idx >= 0:
+                        nid = f"{prefix}_{neighbor_idx}"
+                        if nid not in matched_ids:
+                            neighbor = db.query(Chunk).filter(Chunk.id == nid).first()
+                            if neighbor:
+                                all_chunks_to_use.append(neighbor)
+                                matched_ids.add(nid)
+            except Exception:
+                pass
+
+    # Sort chunks by document_id and id so context flows in natural reading order
+    all_chunks_to_use.sort(key=lambda x: (x.document_id or "", x.id or ""))
+
     context_parts = []
     sources = []
-    for i, c in enumerate(chunks, 1):
+    for i, c in enumerate(all_chunks_to_use, 1):
         context_parts.append(f"[Source {i} - {c.title or c.document_id}]\n{c.text}")
         sources.append(c.title or c.document_id)
     context = "\n\n".join(context_parts)
@@ -274,12 +296,17 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
 
     if groq_client:
         system = (
-            "You are a helpful, intelligent assistant. Answer the user's question clearly, thoroughly, "
-            "and accurately based on the provided context from their documents. Summarize and explain the relevant points. "
-            "Only if the provided context is completely unrelated or empty, state: "
+            "You are a helpful, expert AI assistant. Answer the user's question completely, "
+            "thoroughly, and accurately based on the provided document context.\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "- When asked about functions, characteristics, types, steps, advantages, disadvantages, "
+            "or list items: Carefully read ALL provided context and list EVERY SINGLE ONE mentioned (e.g. 1, 2, 3, 4, etc.).\n"
+            "- Do NOT stop after only 1 item. Be exhaustive and provide all points found in the text.\n"
+            "- Explain each point clearly with bullet points or numbered lists.\n"
+            "- Only if the provided context contains zero relevant information, state: "
             "'I couldn't find that in your documents.'"
         )
-        user = f"Context from documents:\n{context}\n\nQuestion: {req.question}\n\nAnswer:"
+        user = f"Context from documents:\n{context}\n\nQuestion: {req.question}\n\nComplete, Exhaustive Answer:"
         
         models_to_try = [
             os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
@@ -293,7 +320,7 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
                     messages=[{"role":"system","content":system},
                               {"role":"user","content":user}],
                     temperature=0.2,
-                    max_tokens=800,
+                    max_tokens=1500,
                 )
                 answer = resp.choices[0].message.content.strip()
                 answer += f"\n\n📚 Sources: {', '.join(unique_sources)}"
@@ -301,7 +328,7 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
             except Exception:
                 continue
 
-    return {"answer": f"Top matches for your question:\n\n{context[:1500]}"}
+    return {"answer": f"Top matches for your question:\n\n{context[:2000]}"}
 
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
