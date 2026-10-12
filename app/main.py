@@ -139,19 +139,28 @@ def embed_batch(texts):
     return [v.tolist() for v in model.encode(texts, normalize_embeddings=True, batch_size=16)]
 
 def cosine(a, b):
-    a = np.array(a); b = np.array(b)
-    return float(np.dot(a, b))
+    a = np.array(a, dtype=np.float32)
+    b = np.array(b, dtype=np.float32)
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
 
-def semantic_search(db: Session, question: str, top_k: int = 5):
+def semantic_search(db: Session, question: str, top_k: int = 7):
     chunks = db.query(Chunk).filter(Chunk.embedding.isnot(None)).all()
     if not chunks:
         return []
     q_vec = embed(question)
+    q_words = [w.lower() for w in re.findall(r"\w+", question) if len(w) > 2]
     scored = []
     for c in chunks:
         try:
-            s = cosine(q_vec, c.embedding)
-            scored.append((s, c))
+            sim = cosine(q_vec, c.embedding)
+            c_text_lower = (c.text or "").lower()
+            keyword_matches = sum(1 for w in q_words if w in c_text_lower)
+            boost = (keyword_matches / max(len(q_words), 1)) * 0.35
+            scored.append((sim + boost, c))
         except Exception:
             continue
     scored.sort(key=lambda x: -x[0])
@@ -265,24 +274,32 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
 
     if groq_client:
         system = (
-            "You are a precise assistant. Answer the user's question using ONLY the "
-            "context provided. Be accurate and concise. If the answer isn't in the "
-            "context, say 'I couldn't find that in your documents.'"
+            "You are a helpful, intelligent assistant. Answer the user's question clearly, thoroughly, "
+            "and accurately based on the provided context from their documents. Summarize and explain the relevant points. "
+            "Only if the provided context is completely unrelated or empty, state: "
+            "'I couldn't find that in your documents.'"
         )
-        user = f"Context:\n{context}\n\nQuestion: {req.question}\n\nAnswer:"
-        try:
-            resp = groq_client.chat.completions.create(
-                model="openai/gpt-oss-20b",
-                messages=[{"role":"system","content":system},
-                          {"role":"user","content":user}],
-                temperature=0.2,
-                max_tokens=600,
-            )
-            answer = resp.choices[0].message.content.strip()
-            answer += f"\n\n📚 Sources: {', '.join(unique_sources)}"
-            return {"answer": answer}
-        except Exception as e:
-            return {"answer": f"(Groq error: {e})\n\nTop matches from your documents:\n\n{context[:1200]}"}
+        user = f"Context from documents:\n{context}\n\nQuestion: {req.question}\n\nAnswer:"
+        
+        models_to_try = [
+            os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "llama-3.1-8b-instant",
+            "gemma2-9b-it"
+        ]
+        for m in models_to_try:
+            try:
+                resp = groq_client.chat.completions.create(
+                    model=m,
+                    messages=[{"role":"system","content":system},
+                              {"role":"user","content":user}],
+                    temperature=0.2,
+                    max_tokens=800,
+                )
+                answer = resp.choices[0].message.content.strip()
+                answer += f"\n\n📚 Sources: {', '.join(unique_sources)}"
+                return {"answer": answer}
+            except Exception:
+                continue
 
     return {"answer": f"Top matches for your question:\n\n{context[:1500]}"}
 
