@@ -1,12 +1,13 @@
 fastapi
 uvicorn[standard]
 sqlalchemy
+psycopg2-binary
 python-jose[cryptography]
 passlib[bcrypt]
 python-multipart
 pydantic
 PyPDF2
 python-docx
-sentence-transformers
+fastembed
 numpy
 groq

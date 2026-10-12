@@ -27,16 +27,33 @@ except Exception:
     groq_client = None
 
 # ---- Embeddings (local, free) ----
-from sentence_transformers import SentenceTransformer
-EMBED_MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# ---- Embeddings (memory-efficient via fastembed/onnx) ----
+EMBED_MODEL = None
 EMBED_DIM = 384
+
+def get_embed_model():
+    global EMBED_MODEL
+    if EMBED_MODEL is None:
+        try:
+            from fastembed import TextEmbedding
+            EMBED_MODEL = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        except Exception:
+            from sentence_transformers import SentenceTransformer
+            EMBED_MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    return EMBED_MODEL
 
 SECRET_KEY = os.getenv("JWT_SECRET", "change-this")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-DATABASE_URL = "sqlite:///./rag.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rag.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+if "sqlite" in DATABASE_URL:
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -110,12 +127,16 @@ app.add_middleware(
 
 # ================= EMBEDDING HELPERS =================
 def embed(text: str):
-    vec = EMBED_MODEL.encode([text], normalize_embeddings=True)[0]
-    return vec.tolist()
+    model = get_embed_model()
+    if hasattr(model, "embed"):
+        return list(model.embed([text]))[0].tolist()
+    return model.encode([text], normalize_embeddings=True)[0].tolist()
 
 def embed_batch(texts):
-    vecs = EMBED_MODEL.encode(texts, normalize_embeddings=True, batch_size=16)
-    return [v.tolist() for v in vecs]
+    model = get_embed_model()
+    if hasattr(model, "embed"):
+        return [v.tolist() for v in model.embed(texts)]
+    return [v.tolist() for v in model.encode(texts, normalize_embeddings=True, batch_size=16)]
 
 def cosine(a, b):
     a = np.array(a); b = np.array(b)
