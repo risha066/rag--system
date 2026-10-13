@@ -18,13 +18,16 @@ try:
 except Exception:
     docx = None
 
-# ---- Groq client (optional) ----
-try:
-    from groq import Groq
-    GROQ_KEY = os.getenv("GROQ_API_KEY", "")
-    groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-except Exception:
-    groq_client = None
+# ---- Groq client helper ----
+def get_groq_client():
+    key = os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key") or ""
+    if not key or not key.strip():
+        return None
+    try:
+        from groq import Groq
+        return Groq(api_key=key.strip())
+    except Exception:
+        return None
 
 # ---- Embeddings (local, free) ----
 # ---- Embeddings (memory-efficient via fastembed/onnx) ----
@@ -147,24 +150,166 @@ def cosine(a, b):
         return 0.0
     return float(np.dot(a, b) / (na * nb))
 
-def semantic_search(db: Session, question: str, top_k: int = 12):
+def semantic_search(db: Session, question: str, top_k: int = 15):
     chunks = db.query(Chunk).filter(Chunk.embedding.isnot(None)).all()
     if not chunks:
         return []
     q_vec = embed(question)
+    q_clean = question.lower().strip()
     q_words = [w.lower() for w in re.findall(r"\w+", question) if len(w) > 2]
+    
     scored = []
     for c in chunks:
         try:
             sim = cosine(q_vec, c.embedding)
             c_text_lower = (c.text or "").lower()
+            
+            # 1. Exact phrase boost (e.g. "functions of statistics")
+            phrase_boost = 0.0
+            if q_clean in c_text_lower:
+                phrase_boost = 1.2
+            elif "functions of" in c_text_lower or "function of" in c_text_lower:
+                phrase_boost = 0.8
+            elif "functions:" in c_text_lower or "function:" in c_text_lower:
+                phrase_boost = 0.7
+                
+            # 2. Keyword boost
             keyword_matches = sum(1 for w in q_words if w in c_text_lower)
-            boost = (keyword_matches / max(len(q_words), 1)) * 0.4
-            scored.append((sim + boost, c))
+            word_boost = (keyword_matches / max(len(q_words), 1)) * 0.4
+
+            # 3. Later numbered items (10–15) often sit in later chunks
+            if re.search(r"\b(?:1[0-5]|[6-9])\s*[.)]", c.text or ""):
+                phrase_boost += 0.35
+            
+            total = sim + phrase_boost + word_boost
+            scored.append((total, c))
         except Exception:
             continue
+            
     scored.sort(key=lambda x: -x[0])
     return [c for _, c in scored[:top_k]]
+
+LIST_QUESTION_RE = re.compile(
+    r"\b(function|functions|characteristic|characteristics|type|types|point|points|"
+    r"advantage|advantages|disadvantage|disadvantages|step|steps|feature|features|"
+    r"principle|principles|list|enumerate|explain all|all the)\b",
+    re.I,
+)
+NUM_ITEM_RE = re.compile(r"(?:^|[^\d])(?:\(|\[)?(\d{1,2})(?:\)|\.|:)\s")
+
+def extract_item_numbers(text: str) -> set:
+    nums = set()
+    for m in NUM_ITEM_RE.finditer(text or ""):
+        n = int(m.group(1))
+        if 1 <= n <= 30:
+            nums.add(n)
+    return nums
+
+def chunk_sort_key(c):
+    cid = c.id or ""
+    if "_" in cid:
+        try:
+            prefix, idx = cid.rsplit("_", 1)
+            return (c.document_id or "", prefix, int(idx))
+        except Exception:
+            pass
+    return (c.document_id or "", cid, 0)
+
+def load_document_chunks(db: Session, doc_id: str):
+    rows = db.query(Chunk).filter(Chunk.document_id == doc_id).all()
+    rows.sort(key=chunk_sort_key)
+    return rows
+
+def stitch_chunk_texts(chunks) -> str:
+    ordered = sorted(chunks, key=chunk_sort_key)
+    if not ordered:
+        return ""
+    text = ordered[0].text or ""
+    for c in ordered[1:]:
+        piece = c.text or ""
+        if not piece:
+            continue
+        overlap = 0
+        max_o = min(len(text), len(piece), 400)
+        for o in range(max_o, 30, -1):
+            if text.endswith(piece[:o]):
+                overlap = o
+                break
+        text += piece[overlap:] if overlap else (" " + piece)
+    return text
+
+def extract_numbered_points(text: str):
+    """Pull sequential 1..N list items out of flattened document text."""
+    matches = list(re.finditer(r'(?:(?<=^)|(?<=[\s;]))(\d{1,2})\s*[.)]\s+', text or ""))
+    if not matches:
+        return []
+    items = []
+    for i, m in enumerate(matches):
+        n = int(m.group(1))
+        if n < 1 or n > 30:
+            continue
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        content = re.sub(r"\s+", " ", (text[start:end] or "").strip())
+        if content:
+            items.append((n, content))
+
+    best, run, expected = [], [], None
+    for n, content in items:
+        if n == 1:
+            run = [(n, content)]
+            expected = 2
+        elif expected is not None and n == expected:
+            run.append((n, content))
+            expected = n + 1
+        else:
+            if len(run) > len(best):
+                best = run
+            run, expected = ([], None)
+            if n == 1:
+                run = [(n, content)]
+                expected = 2
+    if len(run) > len(best):
+        best = run
+    return best
+
+def format_point_list(points) -> str:
+    return "\n\n".join(f"{n}. {t}" for n, t in points)
+
+def expand_list_context(db: Session, chunks, question: str):
+    """Load the whole top document for list questions so later points are not dropped."""
+    by_id = {c.id: c for c in chunks}
+    doc_ids = []
+    seen = set()
+    for c in chunks:
+        if c.document_id and c.document_id not in seen:
+            seen.add(c.document_id)
+            doc_ids.append(c.document_id)
+
+    if LIST_QUESTION_RE.search(question or "") and doc_ids:
+        for extra in load_document_chunks(db, doc_ids[0]):
+            by_id[extra.id] = extra
+    else:
+        prefixes = {}
+        for c in list(by_id.values()):
+            if "_" in (c.id or ""):
+                try:
+                    prefix, idx = c.id.rsplit("_", 1)
+                    prefixes.setdefault(prefix, []).append(int(idx))
+                except Exception:
+                    pass
+        for prefix, idxs in prefixes.items():
+            lo, hi = min(idxs), max(idxs) + 6
+            for i in range(max(0, lo - 1), hi + 1):
+                nid = f"{prefix}_{i}"
+                if nid not in by_id:
+                    extra = db.query(Chunk).filter(Chunk.id == nid).first()
+                    if extra:
+                        by_id[nid] = extra
+
+    result = list(by_id.values())
+    result.sort(key=chunk_sort_key)
+    return result
 
 # ================= CHUNKING =================
 def chunk_text(text: str, size: int = 1200, overlap: int = 200):
@@ -209,6 +354,7 @@ def ingest(req: IngestRequest, db: Session = Depends(get_db)):
     if not pieces:
         return {"status": "empty", "chunks": 0}
 
+    db.query(Chunk).filter(Chunk.document_id == req.document_id).delete()
     vecs = embed_batch(pieces)
     for i, (piece, vec) in enumerate(zip(pieces, vecs)):
         db.add(Chunk(id=f"{req.document_id}_{i}", document_id=req.document_id,
@@ -251,6 +397,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
         db.add(Document(id=doc_id, title=filename, owner_id=1)); db.commit()
 
     pieces = chunk_text(content)
+    db.query(Chunk).filter(Chunk.document_id == doc_id).delete()
     vecs = embed_batch(pieces)
     for i, (piece, vec) in enumerate(zip(pieces, vecs)):
         db.add(Chunk(id=f"{doc_id}_{i}", document_id=doc_id,
@@ -260,75 +407,96 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
-    chunks = semantic_search(db, req.question, top_k=12)
+    chunks = semantic_search(db, req.question, top_k=20)
     if not chunks:
         return {"answer": "No documents found. Please ingest some documents first."}
 
-    # Expand matched chunks with their direct adjacent chunks so multi-part lists are unbroken
-    matched_ids = {c.id for c in chunks}
-    all_chunks_to_use = list(chunks)
-    for c in chunks:
-        if "_" in (c.id or ""):
-            try:
-                prefix, idx_str = c.id.rsplit("_", 1)
-                idx = int(idx_str)
-                for neighbor_idx in [idx - 1, idx + 1]:
-                    if neighbor_idx >= 0:
-                        nid = f"{prefix}_{neighbor_idx}"
-                        if nid not in matched_ids:
-                            neighbor = db.query(Chunk).filter(Chunk.id == nid).first()
-                            if neighbor:
-                                all_chunks_to_use.append(neighbor)
-                                matched_ids.add(nid)
-            except Exception:
-                pass
+    top_doc_id = chunks[0].document_id
+    doc_chunks = load_document_chunks(db, top_doc_id) if top_doc_id else expand_list_context(db, chunks, req.question)
+    stitched = stitch_chunk_texts(doc_chunks)
+    points = extract_numbered_points(stitched)
+    unique_sources = list(dict.fromkeys([(c.title or c.document_id) for c in doc_chunks]))
+    source_line = f"\n\n📚 Sources: {', '.join(unique_sources)}"
 
-    # Sort chunks by document_id and id so context flows in natural reading order
-    all_chunks_to_use.sort(key=lambda x: (x.document_id or "", x.id or ""))
+    is_list_q = bool(LIST_QUESTION_RE.search(req.question or ""))
+    extracted = format_point_list(points) if points else ""
 
-    context_parts = []
-    sources = []
-    for i, c in enumerate(all_chunks_to_use, 1):
-        context_parts.append(f"[Source {i} - {c.title or c.document_id}]\n{c.text}")
-        sources.append(c.title or c.document_id)
-    context = "\n\n".join(context_parts)
-    unique_sources = list(dict.fromkeys(sources))
-
-    if groq_client:
+    # If the notes contain a real numbered list, return that list as the source of truth.
+    # The model may polish wording, but missing points fall back to the extracted text.
+    groq_client = get_groq_client()
+    if groq_client and extracted and (is_list_q or len(points) >= 6):
         system = (
-            "You are a helpful, expert AI assistant. Answer the user's question completely, "
-            "thoroughly, and accurately based on the provided document context.\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "- When asked about functions, characteristics, types, steps, advantages, disadvantages, "
-            "or list items: Carefully read ALL provided context and list EVERY SINGLE ONE mentioned (e.g. 1, 2, 3, 4, etc.).\n"
-            "- Do NOT stop after only 1 item. Be exhaustive and provide all points found in the text.\n"
-            "- Explain each point clearly with bullet points or numbered lists.\n"
-            "- Only if the provided context contains zero relevant information, state: "
-            "'I couldn't find that in your documents.'"
+            "You copy and clearly present a numbered list from the user's notes. "
+            "You must keep EVERY point number and the original meaning. "
+            "Do not summarize. Do not skip later points. Do not invent extra points."
         )
-        user = f"Context from documents:\n{context}\n\nQuestion: {req.question}\n\nComplete, Exhaustive Answer:"
-        
+        user = (
+            f"Question: {req.question}\n\n"
+            f"COMPLETE LIST FROM THE DOCUMENT ({len(points)} points, {points[0][0]} through {points[-1][0]}):\n"
+            f"{extracted}\n\n"
+            f"Rewrite this list clearly. Include all {len(points)} points with their original numbers."
+        )
         models_to_try = [
             os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             "llama-3.1-8b-instant",
-            "gemma2-9b-it"
+            "gemma2-9b-it",
         ]
         for m in models_to_try:
             try:
                 resp = groq_client.chat.completions.create(
                     model=m,
-                    messages=[{"role":"system","content":system},
-                              {"role":"user","content":user}],
-                    temperature=0.2,
-                    max_tokens=1500,
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                    temperature=0.1,
+                    max_tokens=4096,
                 )
-                answer = resp.choices[0].message.content.strip()
-                answer += f"\n\n📚 Sources: {', '.join(unique_sources)}"
-                return {"answer": answer}
+                answer = (resp.choices[0].message.content or "").strip()
+                missing = [n for n, _ in points if n not in extract_item_numbers(answer)]
+                if missing or not answer:
+                    answer = extracted
+                return {"answer": answer + source_line}
+            except Exception:
+                continue
+        return {"answer": extracted + source_line}
+
+    all_chunks_to_use = doc_chunks if (is_list_q and doc_chunks) else expand_list_context(db, chunks, req.question)
+    context = stitched if stitched else "\n\n".join(
+        f"[Source {i} - {c.title or c.document_id}]\n{c.text}"
+        for i, c in enumerate(all_chunks_to_use, 1)
+    )
+    unique_sources = list(dict.fromkeys([(c.title or c.document_id) for c in all_chunks_to_use]))
+    source_line = f"\n\n📚 Sources: {', '.join(unique_sources)}"
+
+    if groq_client:
+        system = (
+            "Answer using ONLY the document context. Be complete and accurate. "
+            "Do not skip later sections of the notes. "
+            "If the context is insufficient, say you couldn't find it."
+        )
+        user = f"Context:\n{context}\n\nQuestion: {req.question}\n\nComplete answer:"
+        models_to_try = [
+            os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "llama-3.1-8b-instant",
+            "gemma2-9b-it",
+        ]
+        for m in models_to_try:
+            try:
+                resp = groq_client.chat.completions.create(
+                    model=m,
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+                answer = (resp.choices[0].message.content or "").strip()
+                if answer:
+                    return {"answer": answer + source_line}
             except Exception:
                 continue
 
-    return {"answer": f"Top matches for your question:\n\n{context[:2000]}"}
+    if extracted:
+        return {"answer": extracted + source_line}
+    return {"answer": f"Top matches for your question:\n\n{context[:4000]}"}
 
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):

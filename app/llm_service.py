@@ -32,7 +32,7 @@ def _chat(model: str, system: str, user: str, json_mode: bool = False) -> str:
             {"role": "user", "content": user}
         ],
         temperature=0.1,
-        max_tokens=2048,
+        max_tokens=4096,
         **kwargs,
     )
     return response.choices[0].message.content
@@ -81,13 +81,14 @@ def generate_answer(question: str, graph_statements: list, passages: list) -> st
     
     system = (
         "You are a precise assistant. Answer using ONLY the given context. "
-        "Provide a detailed, comprehensive answer with examples from the context. "
+        "Give a complete, detailed answer — do not summarize or omit items. "
+        "If the context contains a list, include every item with explanation. "
         "Cite every factual claim with the matching [chunk_id]. "
         "If the context doesn't contain the answer, say you don't know — do not guess."
     )
     user = (
         f"Context (Passage-derived):\n{passage_block}\n\n"
         f"Question: {question}\n\n"
-        "Provide a thorough, detailed answer with all relevant information from the context."
+        "Provide a thorough, complete answer with all relevant information from the context. Do not truncate."
     )
     return _chat(ACCURATE_MODEL, system, user)

@@ -25,10 +25,10 @@ body{font-family:Arial,sans-serif;background:#f0f4ff;min-height:100vh;display:fl
 .btn-full{width:100%}
 .doc-list{list-style:none}
 .doc-list li{background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-.chat-box{background:#f8f9fa;border-radius:12px;padding:16px;height:250px;overflow-y:auto;margin-bottom:12px}
-.chat-msg{padding:8px 14px;border-radius:12px;margin-bottom:8px;max-width:80%}
+.chat-box{background:#f8f9fa;border-radius:12px;padding:16px;height:420px;overflow-y:auto;margin-bottom:12px}
+.chat-msg{padding:8px 14px;border-radius:12px;margin-bottom:8px;max-width:80%;white-space:pre-wrap;word-wrap:break-word}
 .chat-msg.user{background:#7c3aed;color:#fff;margin-left:auto}
-.chat-msg.bot{background:#fff;border:1px solid #ddd}
+.chat-msg.bot{background:#fff;border:1px solid #ddd;max-width:100%}
 .chat-input{display:flex;gap:10px}
 .chat-input input{flex:1;padding:12px;border:2px solid #ddd;border-radius:8px}
 .form-group{margin-bottom:16px}
@@ -214,21 +214,25 @@ function loadChat(c){
     '<div class="chat-input"><input type="text" id="chatInput" placeholder="Ask a question..." onkeypress="if(event.key===\'Enter\') sendChat()"><button class="btn" onclick="sendChat()">Send</button></div>';
 }
 
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
 function sendChat(){
   const input=document.getElementById('chatInput');
   const box=document.getElementById('chatBox');
   const q=input.value.trim(); if(!q)return;
-  box.innerHTML+='<div class="chat-msg user">'+q+'</div>'; input.value='';
+  box.innerHTML+='<div class="chat-msg user">'+escapeHtml(q)+'</div>'; input.value='';
   const id='loading-'+Date.now();
   box.innerHTML+='<div class="chat-msg bot" id="'+id+'">⏳ Thinking...</div>';
   box.scrollTop=box.scrollHeight;
   apiCall('/query','POST',{question:q}).then(d=>{
     const el=document.getElementById(id);if(el)el.remove();
-    box.innerHTML+='<div class="chat-msg bot">'+(d.answer||'No answer found')+'</div>';
+    box.innerHTML+='<div class="chat-msg bot">'+escapeHtml(d.answer||'No answer found')+'</div>';
     box.scrollTop=box.scrollHeight;
   }).catch(e=>{
     const el=document.getElementById(id);if(el)el.remove();
-    box.innerHTML+='<div class="chat-msg bot" style="color:red;">❌ '+e.message+'</div>';
+    box.innerHTML+='<div class="chat-msg bot" style="color:red;">❌ '+escapeHtml(e.message)+'</div>';
   });
 }
 
