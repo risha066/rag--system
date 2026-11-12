@@ -1,41 +1,46 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>MyAI Assistant</title>
+    <meta charset="UTF-8">
+    <title>DocuAI Simple Interface</title>
     <style>
-        body { font-family: Arial; max-width: 500px; margin: 50px auto; padding: 20px; }
-        input, button { padding: 10px; margin: 5px 0; width: 100%; }
-        button { background: #7c3aed; color: white; border: none; cursor: pointer; }
+        body { font-family: Arial, sans-serif; max-width: 540px; margin: 40px auto; padding: 20px; background: #f8fafc; }
+        .card { background: #fff; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        input, button { padding: 10px; margin: 6px 0; width: 100%; box-sizing: border-box; border-radius: 6px; border: 1px solid #cbd5e1; }
+        button { background: #4f46e5; color: white; border: none; font-weight: bold; cursor: pointer; }
+        button:hover { background: #4338ca; }
         .hidden { display: none; }
-        .error { color: red; }
-        .success { color: green; }
+        .error { color: #dc2626; font-size: 13px; }
+        .success { color: #16a34a; font-size: 13px; }
+        #answer { margin-top: 15px; padding: 12px; background: #f1f5f9; border-radius: 8px; white-space: pre-wrap; font-size: 14px; }
     </style>
 </head>
 <body>
 
-<h1>🧠 MyAI Assistant</h1>
+<div class="card">
+    <h2 style="margin-top:0; color:#1e293b;">🧠 DocuAI Assistant</h2>
+    <p style="font-size:13px; color:#64748b; margin-top:-6px;">Lightweight Document Chat</p>
 
-<div id="loginDiv">
-    <h3>Login</h3>
-    <input type="email" id="email" value="newuser@email.com" placeholder="Email">
-    <input type="password" id="password" value="securepass123" placeholder="Password">
-    <button onclick="login()">Login</button>
-    <p id="msg"></p>
-</div>
+    <div id="loginDiv">
+        <h3>Sign In</h3>
+        <input type="email" id="email" value="newuser@email.com" placeholder="Email">
+        <input type="password" id="password" value="securepass123" placeholder="Password">
+        <button onclick="login()">Login</button>
+        <p id="msg"></p>
+    </div>
 
-<div id="appDiv" class="hidden">
-    <h3>✅ Logged in!</h3>
-    <p>Chat with your documents</p>
-    <input type="text" id="question" placeholder="Ask a question...">
-    <button onclick="ask()">Ask</button>
-    <div id="answer"></div>
-    <br>
-    <button onclick="logout()" style="background:red;">Logout</button>
+    <div id="appDiv" class="hidden">
+        <p style="color:#16a34a; font-weight:600;">✅ Connected</p>
+        <input type="text" id="question" placeholder="Ask a question about your documents..." onkeydown="if(event.key==='Enter') ask()">
+        <button onclick="ask()">Ask DocuAI</button>
+        <div id="answer"></div>
+        <button onclick="logout()" style="background:#ef4444; margin-top:20px;">Logout</button>
+    </div>
 </div>
 
 <script>
-    const API = 'https://rag-backend-zrid.onrender.com';
-    let token = localStorage.getItem('token');
+    const API = (window.location.protocol.startsWith('http')) ? window.location.origin : 'http://localhost:8000';
+    let token = localStorage.getItem('docuai_token');
 
     if (token) {
         document.getElementById('loginDiv').classList.add('hidden');
@@ -46,6 +51,7 @@
         const email = document.getElementById('email').value;
         const password = document.getElementById('password').value;
         const msg = document.getElementById('msg');
+        msg.textContent = 'Connecting...';
 
         try {
             const fd = new URLSearchParams();
@@ -57,17 +63,17 @@
 
             if (res.ok) {
                 token = data.access_token;
-                localStorage.setItem('token', token);
+                localStorage.setItem('docuai_token', token);
                 msg.innerHTML = '<span class="success">✅ Login successful!</span>';
                 setTimeout(() => {
                     document.getElementById('loginDiv').classList.add('hidden');
                     document.getElementById('appDiv').classList.remove('hidden');
-                }, 500);
+                }, 400);
             } else {
                 msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Login failed') + '</span>';
             }
         } catch(e) {
-            msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
+            msg.innerHTML = '<span class="error">❌ Cannot reach backend at ' + API + '</span>';
         }
     }
 
@@ -85,14 +91,14 @@
                 body: JSON.stringify({ question: question })
             });
             const data = await res.json();
-            answerDiv.innerHTML = '📝 ' + (data.answer || 'No answer');
+            answerDiv.innerHTML = '<strong>Answer:</strong>\n' + (data.answer || 'No answer');
         } catch(e) {
             answerDiv.innerHTML = '❌ ' + e.message;
         }
     }
 
     function logout() {
-        localStorage.removeItem('token');
+        localStorage.removeItem('docuai_token');
         location.reload();
     }
 </script>

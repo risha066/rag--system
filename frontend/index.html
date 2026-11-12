@@ -3,277 +3,985 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>MyAI Assistant</title>
+<title>DocuAI — Intelligent Document Intelligence & RAG System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:Arial,sans-serif;background:#f0f4ff;min-height:100vh;display:flex;justify-content:center;align-items:center}
-.container{background:#fff;padding:30px;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.15);width:100%;max-width:800px;max-height:95vh;overflow-y:auto}
-.logo-text{font-size:28px;font-weight:700;text-align:center}
-.logo-text span{color:#7c3aed}
-.subtitle{text-align:center;color:#666;margin-bottom:20px}
-.nav-bar{display:flex;gap:8px;margin:15px 0;flex-wrap:wrap}
-.nav-bar button{padding:8px 16px;border:2px solid #ddd;background:#fff;border-radius:8px;cursor:pointer}
-.nav-bar button.active{border-color:#7c3aed;background:#ede9fe;color:#7c3aed}
-.stats{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
-.stat-card{background:#f8f9fa;padding:16px;border-radius:12px;text-align:center}
-.stat-card h3{font-size:13px;color:#888}
-.stat-card p{font-size:26px;font-weight:700}
-.btn{padding:10px 20px;background:#7c3aed;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px}
-.btn:hover{background:#6d28d9}
-.btn-sm{padding:4px 12px;font-size:12px}
-.btn-red{background:#e74c3c}.btn-red:hover{background:#c0392b}
-.btn-full{width:100%}
-.doc-list{list-style:none}
-.doc-list li{background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-.chat-box{background:#f8f9fa;border-radius:12px;padding:16px;height:420px;overflow-y:auto;margin-bottom:12px}
-.chat-msg{padding:8px 14px;border-radius:12px;margin-bottom:8px;max-width:80%;white-space:pre-wrap;word-wrap:break-word}
-.chat-msg.user{background:#7c3aed;color:#fff;margin-left:auto}
-.chat-msg.bot{background:#fff;border:1px solid #ddd;max-width:100%}
-.chat-input{display:flex;gap:10px}
-.chat-input input{flex:1;padding:12px;border:2px solid #ddd;border-radius:8px}
-.form-group{margin-bottom:16px}
-.form-group label{display:block;margin-bottom:5px;font-weight:500}
-.form-group input,.form-group textarea{width:100%;padding:12px;border:2px solid #ddd;border-radius:8px;font-size:14px}
-.hidden{display:none}
-.ingest-section{background:#f8f9fa;padding:16px;border-radius:12px;margin-bottom:16px}
-.footer{text-align:center;color:#888;font-size:12px;margin-top:20px;border-top:1px solid #ddd;padding-top:15px}
-.brand-name{color:#7c3aed}
-.message{padding:10px;border-radius:8px;margin-top:15px}
-.message.success{background:#d4edda;color:#155724}
-.message.error{background:#f8d7da;color:#721c24}
-.link{text-align:center;margin-top:15px}
-.link a{color:#7c3aed;cursor:pointer}
-.mt-10{margin-top:10px}
-.search-result{background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:8px}
-.flex{display:flex;gap:10px;align-items:center}
-.flex-1{flex:1}
+:root {
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-light: #eef2ff;
+  --bg: #f8fafc;
+  --card-bg: #ffffff;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --border: #e2e8f0;
+  --success: #10b981;
+  --error: #ef4444;
+  --radius: 12px;
+}
+* { margin:0; padding:0; box-sizing:border-box; font-family:'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+body {
+  background: linear-gradient(135deg, #f1f5f9 0%, #e0e7ff 100%);
+  min-height: 100vh;
+  color: var(--text-main);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+}
+.app-container {
+  background: var(--card-bg);
+  width: 100%;
+  max-width: 900px;
+  border-radius: 20px;
+  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.15);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  display: flex;
+  flex-direction: column;
+  min-height: 640px;
+  max-height: 92vh;
+}
+header {
+  padding: 20px 28px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brand-icon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+.brand-text h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.5px;
+}
+.brand-text p {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.api-badge {
+  font-size: 12px;
+  background: var(--primary-light);
+  color: var(--primary);
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border: 1px solid rgba(79, 70, 229, 0.2);
+  transition: all 0.2s;
+}
+.api-badge:hover {
+  background: #e0e7ff;
+}
+.nav-tabs {
+  display: flex;
+  background: #f8fafc;
+  padding: 8px 24px;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.nav-tab {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.nav-tab:hover {
+  color: var(--text-main);
+  background: #f1f5f9;
+}
+.nav-tab.active {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.nav-tab.logout {
+  margin-left: auto;
+  color: var(--error);
+}
+.nav-tab.logout:hover {
+  background: #fef2f2;
+}
+
+.main-content {
+  flex: 1;
+  padding: 24px 28px;
+  overflow-y: auto;
+}
+
+/* Card & Forms */
+.card {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.form-group {
+  margin-bottom: 16px;
+}
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #334155;
+}
+.form-control {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-control:focus {
+  border-color: var(--primary);
+}
+.btn {
+  padding: 10px 20px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn:hover { background: var(--primary-hover); }
+.btn-secondary {
+  background: #f1f5f9;
+  color: #475569;
+}
+.btn-secondary:hover { background: #e2e8f0; }
+.btn-danger {
+  background: #ef4444;
+  color: #fff;
+}
+.btn-danger:hover { background: #dc2626; }
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.btn-full { width: 100%; }
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  padding: 18px;
+  border-radius: var(--radius);
+  text-align: center;
+}
+.stat-card .val {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-top: 4px;
+}
+.stat-card .lbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Chat */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 480px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #f8fafc;
+  overflow: hidden;
+}
+.chat-messages {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.chat-bubble {
+  max-width: 82%;
+  padding: 12px 16px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-bubble.user {
+  background: var(--primary);
+  color: #fff;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+.chat-bubble.bot {
+  background: #ffffff;
+  color: var(--text-main);
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+}
+.chat-bubble.bot .source-tag {
+  display: block;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.chat-input-row {
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+  background: #ffffff;
+  border-top: 1px solid var(--border);
+}
+.quick-prompts {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.quick-pill {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid var(--border);
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.quick-pill:hover {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* Documents List */
+.doc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  margin-bottom: 10px;
+  transition: all 0.2s;
+}
+.doc-item:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+}
+.doc-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.doc-icon {
+  font-size: 24px;
+}
+.doc-info strong {
+  display: block;
+  font-size: 14px;
+  color: #1e293b;
+}
+.doc-info span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* File Drop Zone */
+.drop-zone {
+  border: 2px dashed #cbd5e1;
+  border-radius: var(--radius);
+  padding: 28px;
+  text-align: center;
+  background: #f8fafc;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.drop-zone:hover {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+/* Alerts */
+.msg-alert {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-top: 12px;
+}
+.msg-alert.success { background: #dcfce7; color: #166534; }
+.msg-alert.error { background: #fee2e2; color: #991b1b; }
+
+.hidden { display: none !important; }
+footer {
+  padding: 14px 28px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: #fff;
+}
+footer a { color: var(--primary); text-decoration: none; font-weight: 500; }
 </style>
 </head>
 <body>
-<div class="container" id="app">
 
-  <div id="authSection">
-    <div class="logo-text">📚 <span>MyAI</span> Assistant</div>
-    <p class="subtitle">Your Smart Document Intelligence</p>
+<div class="app-container" id="docuaiApp">
 
-    <div id="loginForm">
-      <div class="form-group"><label>Email</label><input type="email" id="email" value="newuser@email.com"></div>
-      <div class="form-group"><label>Password</label><input type="password" id="password" value="securepass123"></div>
-      <button class="btn btn-full" onclick="login()">Login</button>
-      <div class="link">Don't have an account? <a onclick="showRegister()">Register</a></div>
-      <div id="authMsg" class="message hidden"></div>
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">D</div>
+      <div class="brand-text">
+        <h1>DocuAI</h1>
+        <p>Intelligent Document Intelligence & RAG System</p>
+      </div>
     </div>
+    <div class="api-badge" onclick="promptCustomApi()" title="Click to view or edit backend API URL">
+      <span style="font-size: 10px;">🟢</span>
+      <span id="apiHostDisplay">API: localhost:8000</span>
+    </div>
+  </header>
 
-    <div id="registerForm" class="hidden">
-      <div class="form-group"><label>Email</label><input type="email" id="regEmail"></div>
-      <div class="form-group"><label>Password</label><input type="password" id="regPassword"></div>
-      <button class="btn btn-full" onclick="register()">Register</button>
-      <div class="link">Already have an account? <a onclick="showLogin()">Login</a></div>
-      <div id="regMsg" class="message hidden"></div>
+  <!-- Navigation -->
+  <nav class="nav-tabs hidden" id="navBar">
+    <button class="nav-tab active" onclick="switchTab('dashboard')" id="tabDashboard">📊 Dashboard</button>
+    <button class="nav-tab" onclick="switchTab('ingest')" id="tabIngest">📤 Ingest</button>
+    <button class="nav-tab" onclick="switchTab('chat')" id="tabChat">💬 Chat</button>
+    <button class="nav-tab" onclick="switchTab('documents')" id="tabDocs">📁 Documents</button>
+    <button class="nav-tab" onclick="switchTab('search')" id="tabSearch">🔍 Search</button>
+    <button class="nav-tab logout" onclick="logout()">🚪 Logout</button>
+  </nav>
+
+  <!-- Auth Screen -->
+  <div class="main-content" id="authSection">
+    <div style="max-width: 440px; margin: 40px auto; text-align: center;">
+      <h2 style="font-size: 24px; margin-bottom: 8px;">Welcome to DocuAI</h2>
+      <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 24px;">Sign in to query, search, and chat with your documents</p>
+
+      <div class="card" style="text-align: left;">
+        <div id="loginView">
+          <div class="form-group">
+            <label>Email Address</label>
+            <input type="email" class="form-control" id="loginEmail" value="newuser@email.com" placeholder="name@example.com">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" class="form-control" id="loginPassword" value="securepass123" placeholder="••••••••">
+          </div>
+          <button class="btn btn-full" onclick="handleLogin()">Sign In</button>
+          
+          <div style="margin-top: 14px; text-align: center; font-size: 13px;">
+            <span style="color: var(--text-muted);">Don't have an account?</span>
+            <a href="javascript:void(0)" onclick="toggleAuth('register')" style="color: var(--primary); font-weight: 600;">Register</a>
+          </div>
+        </div>
+
+        <div id="registerView" class="hidden">
+          <div class="form-group">
+            <label>Email Address</label>
+            <input type="email" class="form-control" id="regEmail" placeholder="name@example.com">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" class="form-control" id="regPassword" placeholder="Minimum 6 characters">
+          </div>
+          <button class="btn btn-full" onclick="handleRegister()">Create Account</button>
+          <div style="margin-top: 14px; text-align: center; font-size: 13px;">
+            <span style="color: var(--text-muted);">Already registered?</span>
+            <a href="javascript:void(0)" onclick="toggleAuth('login')" style="color: var(--primary); font-weight: 600;">Sign In</a>
+          </div>
+        </div>
+
+        <div id="authAlert" class="msg-alert hidden"></div>
+      </div>
     </div>
   </div>
 
-  <div id="appSection" class="hidden">
-    <div class="logo-text" style="font-size:22px;">📚 <span>MyAI</span> Assistant</div>
-    <div class="nav-bar">
-      <button onclick="showPage('dashboard')" id="navDashboard">📊 Dashboard</button>
-      <button onclick="showPage('ingest')" id="navIngest">📤 Ingest</button>
-      <button onclick="showPage('chat')" id="navChat">💬 Chat</button>
-      <button onclick="showPage('documents')" id="navDocs">📁 Documents</button>
-      <button onclick="showPage('search')" id="navSearch">🔍 Search</button>
-      <button onclick="logout()" style="border-color:#e74c3c;color:#e74c3c;">🚪 Logout</button>
-    </div>
-    <div id="pageContent"></div>
+  <!-- App Main Screen -->
+  <div class="main-content hidden" id="appSection">
+    <div id="viewContainer"></div>
   </div>
 
-  <div class="footer">© 2026 <span class="brand-name">MyAI Assistant</span> - All rights reserved</div>
+  <!-- Footer -->
+  <footer>
+    <div>DocuAI RAG Engine &bull; Powered by FastAPI &bull; Groq &bull; SentenceTransformers</div>
+    <div><a href="javascript:void(0)" onclick="promptCustomApi()">Change Backend API</a></div>
+  </footer>
+
 </div>
 
 <script>
-const API = 'https://rag-backend-zrid.onrender.com';
-let token = localStorage.getItem('kg_token');
-
-function showRegister(){document.getElementById('loginForm').classList.add('hidden');document.getElementById('registerForm').classList.remove('hidden');document.getElementById('authMsg').classList.add('hidden');}
-function showLogin(){document.getElementById('loginForm').classList.remove('hidden');document.getElementById('registerForm').classList.add('hidden');document.getElementById('regMsg').classList.add('hidden');}
-function showAuthMsg(m,t){const e=document.getElementById('authMsg');e.textContent=m;e.className='message '+t;e.classList.remove('hidden');}
-function showRegMsg(m,t){const e=document.getElementById('regMsg');e.textContent=m;e.className='message '+t;e.classList.remove('hidden');}
-
-async function login(){
-  const email=document.getElementById('email').value;
-  const password=document.getElementById('password').value;
-  if(!email||!password){showAuthMsg('Please enter email and password','error');return;}
-  try{
-    const fd=new URLSearchParams();fd.append('username',email);fd.append('password',password);
-    const res=await fetch(API+'/auth/login',{method:'POST',body:fd});
-    const data=await res.json();
-    if(res.ok){
-      token=data.access_token;localStorage.setItem('kg_token',token);localStorage.setItem('kg_user',email);
-      showAuthMsg('✅ Login successful!','success');
-      setTimeout(()=>{document.getElementById('authSection').classList.add('hidden');document.getElementById('appSection').classList.remove('hidden');showPage('dashboard');},500);
-    } else { showAuthMsg('❌ '+(data.detail||'Login failed'),'error'); }
-  } catch(e){ showAuthMsg('❌ '+e.message,'error'); }
+// ================= BACKEND API RESOLUTION =================
+function getBaseAPI() {
+  const saved = localStorage.getItem('docuai_api_url');
+  if (saved && saved.trim()) return saved.trim().replace(/\/+$/, '');
+  
+  // If hosted on the same origin (FastAPI serving static frontend)
+  if (window.location.protocol.startsWith('http')) {
+    // If running on typical local port or same host
+    if (window.location.port === '8000' || !window.location.port) {
+      return window.location.origin;
+    }
+  }
+  return 'http://localhost:8000';
 }
 
-async function register(){
-  const email=document.getElementById('regEmail').value;
-  const password=document.getElementById('regPassword').value;
-  if(!email||!password){showRegMsg('Please enter email and password','error');return;}
-  try{
-    const res=await fetch(API+'/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
-    const data=await res.json();
-    if(res.ok){ showRegMsg('✅ Registered! Please login.','success'); setTimeout(showLogin,1000); }
-    else { showRegMsg('❌ '+(data.detail||'Registration failed'),'error'); }
-  } catch(e){ showRegMsg('❌ '+e.message,'error'); }
+let API = getBaseAPI();
+
+function updateApiBadge() {
+  try {
+    const url = new URL(API);
+    document.getElementById('apiHostDisplay').textContent = 'API: ' + url.host;
+  } catch(e) {
+    document.getElementById('apiHostDisplay').textContent = 'API: ' + API;
+  }
+}
+updateApiBadge();
+
+function promptCustomApi() {
+  const current = localStorage.getItem('docuai_api_url') || API;
+  const input = prompt("Enter DocuAI Backend API Base URL (e.g. http://localhost:8000):", current);
+  if (input !== null && input.trim()) {
+    localStorage.setItem('docuai_api_url', input.trim().replace(/\/+$/, ''));
+    API = getBaseAPI();
+    updateApiBadge();
+    alert("API updated to: " + API);
+    if (localStorage.getItem('docuai_token')) {
+      switchTab('dashboard');
+    }
+  }
 }
 
-function logout(){localStorage.removeItem('kg_token');localStorage.removeItem('kg_user');token=null;document.getElementById('appSection').classList.add('hidden');document.getElementById('authSection').classList.remove('hidden');document.getElementById('pageContent').innerHTML='';}
+// ================= AUTHENTICATION =================
+let userToken = localStorage.getItem('docuai_token');
+let userEmail = localStorage.getItem('docuai_user') || 'User';
 
-function apiCall(endpoint,method,body){
-  method=method||'GET';
-  const t=localStorage.getItem('kg_token');
-  if(!t)return Promise.reject(new Error('Not authenticated'));
-  const options={method:method,headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'}};
-  if(body)options.body=JSON.stringify(body);
-  return fetch(API+endpoint,options).then(res=>{
-    if(res.status===401){logout();throw new Error('Session expired');}
-    if(!res.ok){return res.json().then(err=>{throw new Error(err.detail||'Request failed');});}
-    return res.json();
-  });
+function toggleAuth(view) {
+  const l = document.getElementById('loginView');
+  const r = document.getElementById('registerView');
+  const alertBox = document.getElementById('authAlert');
+  alertBox.classList.add('hidden');
+  if (view === 'register') {
+    l.classList.add('hidden');
+    r.classList.remove('hidden');
+  } else {
+    r.classList.add('hidden');
+    l.classList.remove('hidden');
+  }
 }
 
-function showPage(page){
-  document.querySelectorAll('.nav-bar button').forEach(b=>b.classList.remove('active'));
-  const navMap={'dashboard':'navDashboard','ingest':'navIngest','chat':'navChat','documents':'navDocs','search':'navSearch'};
-  const btn=document.getElementById(navMap[page]);if(btn)btn.classList.add('active');
-  const content=document.getElementById('pageContent');
-  if(page==='dashboard')loadDashboard(content);
-  else if(page==='ingest')loadIngest(content);
-  else if(page==='chat')loadChat(content);
-  else if(page==='documents')loadDocuments(content);
-  else if(page==='search')loadSearch(content);
+function showAuthAlert(msg, type) {
+  const el = document.getElementById('authAlert');
+  el.textContent = msg;
+  el.className = 'msg-alert ' + type;
+  el.classList.remove('hidden');
 }
 
-function loadDashboard(c){
-  c.innerHTML='<p>Loading...</p>';
-  Promise.all([apiCall('/documents'),apiCall('/chunks')]).then(([docs,chunks])=>{
-    c.innerHTML='<h2>📊 Dashboard</h2><p style="color:#888;margin-bottom:15px;">'+(localStorage.getItem('kg_user')||'')+'</p>'+
-      '<div class="stats">'+
-      '<div class="stat-card"><h3>Documents</h3><p>'+(docs.length||0)+'</p></div>'+
-      '<div class="stat-card"><h3>Chunks</h3><p>'+(chunks.length||0)+'</p></div>'+
-      '<div class="stat-card"><h3>Entities</h3><p>0</p></div>'+
-      '<div class="stat-card"><h3>Queries</h3><p>0</p></div>'+
-      '</div>';
-  }).catch(e=>{ c.innerHTML='<p style="color:red;">❌ '+e.message+'</p>'; });
+async function handleLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value.trim();
+  if (!email || !password) {
+    showAuthAlert('Please enter both email and password', 'error');
+    return;
+  }
+  try {
+    const fd = new URLSearchParams();
+    fd.append('username', email);
+    fd.append('password', password);
+    const res = await fetch(API + '/auth/login', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (res.ok) {
+      userToken = data.access_token;
+      userEmail = email;
+      localStorage.setItem('docuai_token', userToken);
+      localStorage.setItem('docuai_user', email);
+      showAuthAlert('✅ Login successful!', 'success');
+      setTimeout(() => initAppSession(), 400);
+    } else {
+      showAuthAlert('❌ ' + (data.detail || 'Login failed'), 'error');
+    }
+  } catch(err) {
+    showAuthAlert('❌ Connection error to ' + API + ': ' + err.message, 'error');
+  }
 }
 
-function loadIngest(c){
-  c.innerHTML='<h2>📤 Ingest Document</h2>'+
-    '<div class="ingest-section"><h3>📁 Upload File</h3>'+
-    '<p style="color:#888;font-size:13px;margin-bottom:8px;">Supports: .txt, .pdf, .docx</p>'+
-    '<input type="file" id="fileInput" multiple accept=".txt,.pdf,.docx" style="margin-bottom:10px;padding:8px;">'+
-    '<button class="btn" onclick="uploadFile()">Upload</button>'+
-    '<div id="uploadStatus" class="mt-10"></div></div>'+
-    '<div class="ingest-section"><h3>📝 Paste Text</h3>'+
-    '<div class="form-group"><label>Title</label><input type="text" id="docTitle" placeholder="Enter document title"></div>'+
-    '<div class="form-group"><label>Content</label><textarea id="docText" rows="5" placeholder="Paste your text here..."></textarea></div>'+
-    '<button class="btn" onclick="ingestText()">Ingest Text</button>'+
-    '<div id="ingestStatus" class="mt-10"></div></div>';
+async function handleRegister() {
+  const email = document.getElementById('regEmail').value.trim();
+  const password = document.getElementById('regPassword').value.trim();
+  if (!email || !password) {
+    showAuthAlert('Please provide an email and password', 'error');
+    return;
+  }
+  try {
+    const res = await fetch(API + '/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showAuthAlert('✅ Account created! Please log in.', 'success');
+      setTimeout(() => toggleAuth('login'), 800);
+    } else {
+      showAuthAlert('❌ ' + (data.detail || 'Registration failed'), 'error');
+    }
+  } catch(err) {
+    showAuthAlert('❌ Error: ' + err.message, 'error');
+  }
 }
 
-function uploadFile(){
-  const input=document.getElementById('fileInput');
-  const status=document.getElementById('uploadStatus');
-  if(!input.files||!input.files.length){status.innerHTML='<span style="color:red;">Please select a file</span>';return;}
-  status.innerHTML='⏳ Uploading...';
-  const fd=new FormData();
-  for(let i=0;i<input.files.length;i++){fd.append('file',input.files[i]);}
-  fetch(API+'/upload/upload',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('kg_token')},body:fd})
-    .then(res=>res.json().then(d=>({ok:res.ok,d})))
-    .then(({ok,d})=>{ if(ok){status.innerHTML='<span style="color:green;">✅ '+(d.message||'Uploaded!')+'</span>';input.value='';} else {status.innerHTML='<span style="color:red;">❌ '+(d.detail||'Upload failed')+'</span>';} })
-    .catch(e=>{status.innerHTML='<span style="color:red;">❌ '+e.message+'</span>';});
+function logout() {
+  localStorage.removeItem('docuai_token');
+  localStorage.removeItem('docuai_user');
+  userToken = null;
+  document.getElementById('navBar').classList.add('hidden');
+  document.getElementById('appSection').classList.add('hidden');
+  document.getElementById('authSection').classList.remove('hidden');
 }
 
-function ingestText(){
-  const title=document.getElementById('docTitle').value;
-  const text=document.getElementById('docText').value;
-  const status=document.getElementById('ingestStatus');
-  if(!title||!text){status.innerHTML='<span style="color:red;">Please enter title and text</span>';return;}
-  status.innerHTML='⏳ Ingesting...';
-  apiCall('/ingest','POST',{document_id:title.replace(/\s+/g,'_'),title:title,text:text})
-    .then(data=>{
-      if(data.status==='ingested'||data.status==='cached'){
-        status.innerHTML='<span style="color:green;">✅ '+data.status+' ('+(data.chunks||0)+' chunks)</span>';
-        document.getElementById('docTitle').value='';document.getElementById('docText').value='';
-      } else { status.innerHTML='<span style="color:red;">❌ Ingest failed</span>'; }
-    })
-    .catch(e=>{ status.innerHTML='<span style="color:red;">❌ '+e.message+'</span>'; });
+// ================= API WRAPPER =================
+async function apiCall(endpoint, method = 'GET', body = null) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (userToken) headers['Authorization'] = 'Bearer ' + userToken;
+  const options = { method, headers };
+  if (body) options.body = JSON.stringify(body);
+
+  const res = await fetch(API + endpoint, options);
+  if (res.status === 401) {
+    logout();
+    throw new Error('Session expired. Please log in again.');
+  }
+  if (!res.ok) {
+    let errDetail = 'Request failed';
+    try {
+      const err = await res.json();
+      errDetail = err.detail || err.message || errDetail;
+    } catch(e) {}
+    throw new Error(errDetail);
+  }
+  return res.json();
 }
 
-function loadChat(c){
-  c.innerHTML='<h2>💬 Chat</h2><div class="chat-box" id="chatBox"><div class="chat-msg bot">👋 Hello! Ask me anything.</div></div>'+
-    '<div class="chat-input"><input type="text" id="chatInput" placeholder="Ask a question..." onkeypress="if(event.key===\'Enter\') sendChat()"><button class="btn" onclick="sendChat()">Send</button></div>';
+// ================= NAVIGATION & VIEWS =================
+function switchTab(tab) {
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1));
+  if (btn) btn.classList.add('active');
+
+  const container = document.getElementById('viewContainer');
+  if (tab === 'dashboard') renderDashboard(container);
+  else if (tab === 'ingest') renderIngest(container);
+  else if (tab === 'chat') renderChat(container);
+  else if (tab === 'documents') renderDocuments(container);
+  else if (tab === 'search') renderSearch(container);
 }
 
-function escapeHtml(s){
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// ---- 1. DASHBOARD VIEW ----
+async function renderDashboard(c) {
+  c.innerHTML = '<p style="color:var(--text-muted);">Loading system metrics...</p>';
+  try {
+    const [docs, chunks] = await Promise.all([
+      apiCall('/documents'),
+      apiCall('/chunks')
+    ]);
+    c.innerHTML = `
+      <div style="margin-bottom: 20px;">
+        <h2 style="font-size: 20px; font-weight: 700;">Welcome back, ${escapeHtml(userEmail)}</h2>
+        <p style="font-size: 13px; color: var(--text-muted);">Here is an overview of your indexed knowledge base</p>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="lbl">Indexed Documents</div>
+          <div class="val">${docs.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="lbl">Total Chunks</div>
+          <div class="val">${chunks.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="lbl">Embedding Model</div>
+          <div class="val" style="font-size:16px; margin-top:12px; color:#334155;">MiniLM-L6-v2</div>
+        </div>
+        <div class="stat-card">
+          <div class="lbl">Inference LLM</div>
+          <div class="val" style="font-size:16px; margin-top:12px; color:#334155;">Groq LLaMA 3.3</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="font-size: 16px; margin-bottom: 12px;">⚡ Quick Actions</h3>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <button class="btn btn-sm" onclick="switchTab('ingest')">📤 Ingest New File</button>
+          <button class="btn btn-sm btn-secondary" onclick="switchTab('chat')">💬 Start Asking Questions</button>
+          <button class="btn btn-sm btn-secondary" onclick="switchTab('search')">🔍 Semantic Search</button>
+        </div>
+      </div>
+    `;
+  } catch(err) {
+    c.innerHTML = `<div class="msg-alert error">❌ Failed to load metrics: ${escapeHtml(err.message)}</div>`;
+  }
 }
 
-function sendChat(){
-  const input=document.getElementById('chatInput');
-  const box=document.getElementById('chatBox');
-  const q=input.value.trim(); if(!q)return;
-  box.innerHTML+='<div class="chat-msg user">'+escapeHtml(q)+'</div>'; input.value='';
-  const id='loading-'+Date.now();
-  box.innerHTML+='<div class="chat-msg bot" id="'+id+'">⏳ Thinking...</div>';
-  box.scrollTop=box.scrollHeight;
-  apiCall('/query','POST',{question:q}).then(d=>{
-    const el=document.getElementById(id);if(el)el.remove();
-    box.innerHTML+='<div class="chat-msg bot">'+escapeHtml(d.answer||'No answer found')+'</div>';
-    box.scrollTop=box.scrollHeight;
-  }).catch(e=>{
-    const el=document.getElementById(id);if(el)el.remove();
-    box.innerHTML+='<div class="chat-msg bot" style="color:red;">❌ '+escapeHtml(e.message)+'</div>';
-  });
+// ---- 2. INGEST VIEW ----
+function renderIngest(c) {
+  c.innerHTML = `
+    <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 6px;">Ingest Documents</h2>
+    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px;">
+      Upload PDF, Word (DOCX), or plain text files, or paste raw content directly.
+    </p>
+
+    <div class="card">
+      <h3 style="font-size: 15px; margin-bottom: 10px;">📁 File Upload</h3>
+      <div class="drop-zone" onclick="document.getElementById('fileUploadInput').click()">
+        <div style="font-size: 32px; margin-bottom: 8px;">📄</div>
+        <strong style="color: var(--primary);">Click to browse files</strong>
+        <p style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Supports .pdf, .docx, and .txt files</p>
+      </div>
+      <input type="file" id="fileUploadInput" accept=".pdf,.docx,.txt" multiple style="display:none;" onchange="handleFileSelect(this)">
+      <div id="fileUploadStatus" class="mt-10"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size: 15px; margin-bottom: 10px;">📝 Direct Text Ingestion</h3>
+      <div class="form-group">
+        <label>Document Title / Identifier</label>
+        <input type="text" id="pasteDocTitle" class="form-control" placeholder="e.g. Q3 Research Notes">
+      </div>
+      <div class="form-group">
+        <label>Document Content</label>
+        <textarea id="pasteDocContent" class="form-control" rows="6" placeholder="Paste full article or documentation text..."></textarea>
+      </div>
+      <button class="btn" onclick="submitTextIngest()">Ingest Text</button>
+      <div id="textIngestStatus"></div>
+    </div>
+  `;
 }
 
-function loadDocuments(c){
-  c.innerHTML='<p>Loading...</p>';
-  apiCall('/documents').then(docs=>{
-    if(!docs||docs.length===0){ c.innerHTML='<h2>📁 Documents</h2><p style="color:#888;">No documents found. <a onclick="showPage(\'ingest\')" style="color:#7c3aed;cursor:pointer;">Ingest your first document</a></p>'; return; }
-    let html='<h2>📁 Documents ('+docs.length+')</h2><ul class="doc-list">';
-    docs.forEach(d=>{ html+='<li><div><strong>'+(d.title||d.id)+'</strong><span style="color:#888;font-size:12px;display:block;">ID: '+d.id+'</span></div><div><button class="btn btn-sm btn-red" onclick="deleteDoc(\''+d.id+'\')">🗑️ Delete</button></div></li>'; });
-    html+='</ul>'; c.innerHTML=html;
-  }).catch(e=>{ c.innerHTML='<p style="color:red;">❌ '+e.message+'</p>'; });
+async function handleFileSelect(input) {
+  const status = document.getElementById('fileUploadStatus');
+  if (!input.files || !input.files.length) return;
+  
+  status.innerHTML = '<div class="msg-alert" style="background:#e0f2fe; color:#0369a1;">⏳ Processing and embedding document(s)...</div>';
+  
+  for (let i = 0; i < input.files.length; i++) {
+    const file = input.files[i];
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch(API + '/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + userToken },
+        body: fd
+      });
+      const data = await res.json();
+      if (res.ok) {
+        status.innerHTML = `<div class="msg-alert success">✅ Ingested <strong>${escapeHtml(file.name)}</strong> (${data.chunks} chunks created)</div>`;
+      } else {
+        status.innerHTML = `<div class="msg-alert error">❌ ${escapeHtml(data.detail || 'Upload failed')}</div>`;
+      }
+    } catch(err) {
+      status.innerHTML = `<div class="msg-alert error">❌ Error uploading ${escapeHtml(file.name)}: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+  input.value = '';
 }
 
-function deleteDoc(id){
-  if(!confirm('Delete this document?'))return;
-  apiCall('/documents/'+id,'DELETE').then(()=>showPage('documents')).catch(e=>alert('Error: '+e.message));
+async function submitTextIngest() {
+  const title = document.getElementById('pasteDocTitle').value.trim();
+  const text = document.getElementById('pasteDocContent').value.trim();
+  const status = document.getElementById('textIngestStatus');
+  if (!title || !text) {
+    status.innerHTML = '<div class="msg-alert error">Please provide both title and content.</div>';
+    return;
+  }
+  status.innerHTML = '<div class="msg-alert" style="background:#e0f2fe; color:#0369a1;">⏳ Chunking and generating embeddings...</div>';
+  try {
+    const docId = title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const data = await apiCall('/ingest', 'POST', {
+      document_id: docId || 'doc_' + Date.now(),
+      title: title,
+      text: text
+    });
+    status.innerHTML = `<div class="msg-alert success">✅ Ingested successfully: <strong>${escapeHtml(title)}</strong> (${data.chunks} chunks)</div>`;
+    document.getElementById('pasteDocTitle').value = '';
+    document.getElementById('pasteDocContent').value = '';
+  } catch(err) {
+    status.innerHTML = `<div class="msg-alert error">❌ ${escapeHtml(err.message)}</div>`;
+  }
 }
 
-function loadSearch(c){
-  c.innerHTML='<h2>🔍 Search Documents</h2><div class="flex"><input type="text" id="searchInput" placeholder="Search your documents..." class="flex-1" style="padding:12px;border:2px solid #ddd;border-radius:8px;"><button class="btn" onclick="performSearch()">Search</button></div><div id="searchResults" class="mt-10"></div>';
+// ---- 3. CHAT VIEW ----
+function renderChat(c) {
+  c.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <div>
+        <h2 style="font-size: 20px; font-weight: 700;">Document QA Chat</h2>
+        <p style="font-size: 13px; color: var(--text-muted);">Ask questions about your ingested notes and documents</p>
+      </div>
+      <button class="btn btn-sm btn-secondary" onclick="clearChat()">🧹 Clear Chat</button>
+    </div>
+
+    <div class="quick-prompts">
+      <span style="font-size:12px; color:var(--text-muted); align-self:center;">Try:</span>
+      <span class="quick-pill" onclick="sendQuickPrompt('Summarize all the documents')">Summarize all</span>
+      <span class="quick-pill" onclick="sendQuickPrompt('What are the key functions or points explained?')">List key functions</span>
+      <span class="quick-pill" onclick="sendQuickPrompt('Explain the main advantages and limitations')">Advantages & limitations</span>
+    </div>
+
+    <div class="chat-container">
+      <div class="chat-messages" id="chatMsgBox">
+        <div class="chat-bubble bot">👋 Hi! I am <strong>DocuAI</strong>. Ask me anything about your uploaded documents.</div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chatQueryInput" class="form-control" placeholder="Ask a question..." onkeydown="if(event.key==='Enter') submitChatQuery()">
+        <button class="btn" onclick="submitChatQuery()">Send</button>
+      </div>
+    </div>
+  `;
 }
 
-function performSearch(){
-  const q=document.getElementById('searchInput').value.trim();
-  const results=document.getElementById('searchResults');
-  if(!q){results.innerHTML='<p style="color:#888;">Enter a search term</p>';return;}
-  results.innerHTML='<p>⏳ Searching...</p>';
-  apiCall('/search?q='+encodeURIComponent(q)).then(data=>{
-    if(data.results&&data.results.length>0){
-      let html='<p>Found <strong>'+data.total+'</strong> results:</p>';
-      data.results.forEach(r=>{ html+='<div class="search-result"><strong>📄 '+r.document_id+'</strong><p style="margin-top:5px;color:#555;">'+r.text+'</p></div>'; });
-      results.innerHTML=html;
-    } else { results.innerHTML='<p style="color:#888;">No results found</p>'; }
-  }).catch(e=>{ results.innerHTML='<p style="color:red;">❌ '+e.message+'</p>'; });
+function clearChat() {
+  const box = document.getElementById('chatMsgBox');
+  if (box) box.innerHTML = '<div class="chat-bubble bot">👋 Chat cleared. Ask me anything about your uploaded documents!</div>';
 }
 
-document.addEventListener('DOMContentLoaded',()=>{
-  if(localStorage.getItem('kg_token')){
-    document.getElementById('authSection').classList.add('hidden');
-    document.getElementById('appSection').classList.remove('hidden');
-    showPage('dashboard');
+function sendQuickPrompt(q) {
+  const inp = document.getElementById('chatQueryInput');
+  if (inp) {
+    inp.value = q;
+    submitChatQuery();
+  }
+}
+
+async function submitChatQuery() {
+  const inp = document.getElementById('chatQueryInput');
+  const box = document.getElementById('chatMsgBox');
+  const q = inp.value.trim();
+  if (!q) return;
+
+  // Append user bubble
+  box.innerHTML += `<div class="chat-bubble user">${escapeHtml(q)}</div>`;
+  inp.value = '';
+
+  const loadingId = 'loading-' + Date.now();
+  box.innerHTML += `<div class="chat-bubble bot" id="${loadingId}">⏳ Searching documents and synthesizing answer...</div>`;
+  box.scrollTop = box.scrollHeight;
+
+  try {
+    const res = await apiCall('/query', 'POST', { question: q });
+    const loader = document.getElementById(loadingId);
+    if (loader) loader.remove();
+
+    box.innerHTML += `<div class="chat-bubble bot">${formatBotAnswer(res.answer || 'No answer generated')}</div>`;
+    box.scrollTop = box.scrollHeight;
+  } catch(err) {
+    const loader = document.getElementById(loadingId);
+    if (loader) loader.remove();
+    box.innerHTML += `<div class="chat-bubble bot" style="color:var(--error);">❌ Error: ${escapeHtml(err.message)}</div>`;
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+function formatBotAnswer(raw) {
+  // Check for source tag
+  if (raw.includes('📚 Sources:')) {
+    const parts = raw.split('📚 Sources:');
+    const mainText = parts[0].trim();
+    const sources = parts[1].trim();
+    return escapeHtml(mainText) + `<span class="source-tag">📚 <strong>Sources:</strong> ${escapeHtml(sources)}</span>`;
+  }
+  return escapeHtml(raw);
+}
+
+// ---- 4. DOCUMENTS VIEW ----
+async function renderDocuments(c) {
+  c.innerHTML = '<p style="color:var(--text-muted);">Fetching document library...</p>';
+  try {
+    const docs = await apiCall('/documents');
+    if (!docs || docs.length === 0) {
+      c.innerHTML = `
+        <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 6px;">Document Library</h2>
+        <div class="card" style="text-align: center; padding: 40px 20px;">
+          <p style="color: var(--text-muted); margin-bottom: 14px;">No documents ingested yet.</p>
+          <button class="btn" onclick="switchTab('ingest')">📤 Ingest Your First Document</button>
+        </div>
+      `;
+      return;
+    }
+
+    let itemsHtml = '';
+    docs.forEach(d => {
+      itemsHtml += `
+        <div class="doc-item">
+          <div class="doc-meta">
+            <div class="doc-icon">📄</div>
+            <div class="doc-info">
+              <strong>${escapeHtml(d.title || d.id)}</strong>
+              <span>ID: ${escapeHtml(d.id)} &bull; ${d.chunks || 0} chunks</span>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-danger" onclick="confirmDeleteDoc('${escapeHtml(d.id)}')">🗑️ Delete</button>
+        </div>
+      `;
+    });
+
+    c.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <div>
+          <h2 style="font-size: 20px; font-weight: 700;">Document Library (${docs.length})</h2>
+          <p style="font-size: 13px; color: var(--text-muted);">Manage your active documents and indexed knowledge chunks</p>
+        </div>
+        <button class="btn btn-sm" onclick="switchTab('ingest')">➕ Add Document</button>
+      </div>
+      <div>${itemsHtml}</div>
+    `;
+  } catch(err) {
+    c.innerHTML = `<div class="msg-alert error">❌ Error loading documents: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function confirmDeleteDoc(docId) {
+  if (!confirm(`Are you sure you want to delete document '${docId}' and all its embeddings?`)) return;
+  try {
+    await apiCall('/documents/' + encodeURIComponent(docId), 'DELETE');
+    switchTab('documents');
+  } catch(err) {
+    alert("Delete failed: " + err.message);
+  }
+}
+
+// ---- 5. SEARCH VIEW ----
+function renderSearch(c) {
+  c.innerHTML = `
+    <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 6px;">Semantic Vector Search</h2>
+    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px;">
+      Perform direct vector similarity search across all stored chunk embeddings.
+    </p>
+
+    <div style="display: flex; gap: 10px; margin-bottom: 18px;">
+      <input type="text" id="vectorSearchInput" class="form-control" placeholder="Search concepts, questions, or keywords..." onkeydown="if(event.key==='Enter') executeSearch()">
+      <button class="btn" onclick="executeSearch()">Search</button>
+    </div>
+
+    <div id="searchResultsBox"></div>
+  `;
+}
+
+async function executeSearch() {
+  const inp = document.getElementById('vectorSearchInput');
+  const box = document.getElementById('searchResultsBox');
+  const q = inp.value.trim();
+  if (!q) return;
+
+  box.innerHTML = '<p style="color:var(--text-muted);">⏳ Searching embeddings...</p>';
+  try {
+    const data = await apiCall('/search?q=' + encodeURIComponent(q));
+    if (!data.results || data.results.length === 0) {
+      box.innerHTML = '<div class="card" style="text-align:center; color:var(--text-muted);">No matching chunks found.</div>';
+      return;
+    }
+    let html = `<p style="font-size:13px; margin-bottom:12px; font-weight:600;">Found ${data.total} relevant chunk(s):</p>`;
+    data.results.forEach((r, idx) => {
+      html += `
+        <div class="card" style="margin-bottom: 12px; padding: 14px 18px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+            <strong style="color:var(--primary); font-size:14px;">Chunk #${idx + 1} &bull; ${escapeHtml(r.title || r.document_id)}</strong>
+            <span style="font-size:11px; color:var(--text-muted);">${escapeHtml(r.chunk_id)}</span>
+          </div>
+          <p style="font-size: 13px; color: #334155; line-height: 1.5;">${escapeHtml(r.text)}</p>
+        </div>
+      `;
+    });
+    box.innerHTML = html;
+  } catch(err) {
+    box.innerHTML = `<div class="msg-alert error">❌ Search error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// ================= UTILITIES =================
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function initAppSession() {
+  document.getElementById('authSection').classList.add('hidden');
+  document.getElementById('navBar').classList.remove('hidden');
+  document.getElementById('appSection').classList.remove('hidden');
+  switchTab('dashboard');
+}
+
+// Auto-login on load if token present
+document.addEventListener('DOMContentLoaded', () => {
+  if (userToken) {
+    initAppSession();
   }
 });
 </script>

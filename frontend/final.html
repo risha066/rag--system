@@ -1,257 +1,132 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>MyAI Assistant</title>
+    <meta charset="UTF-8">
+    <title>DocuAI Direct Portal</title>
     <style>
-        body {
-            font-family: Arial;
-            max-width: 500px;
-            margin: 50px auto;
-            padding: 20px;
-            background: #f0f4ff;
-        }
-        input,
-        button,
-        textarea {
-            padding: 10px;
-            margin: 5px 0;
-            width: 100%;
-            border-radius: 8px;
-            border: 1px solid #ddd;
-            font-size: 14px;
-        }
-        button {
-            background: #7c3aed;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #6d28d9;
-        }
-        .hidden {
-            display: none;
-        }
-        .success {
-            color: green;
-        }
-        .error {
-            color: red;
-        }
-        h2 {
-            text-align: center;
-        }
-        #msg,
-        #ingestMsg,
-        #answer {
-            margin: 10px 0;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f8f9fa;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
+        body { font-family: Arial, sans-serif; max-width: 580px; margin: 40px auto; padding: 20px; background: #f1f5f9; }
+        .box { background: white; padding: 25px; border-radius: 12px; border: 1px solid #cbd5e1; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        input, button, textarea { padding: 10px; margin: 6px 0; width: 100%; box-sizing: border-box; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 14px; }
+        button { background: #4f46e5; color: white; border: none; font-weight: 600; cursor: pointer; }
+        button:hover { background: #4338ca; }
+        .hidden { display: none; }
+        .success { color: #16a34a; }
+        .error { color: #dc2626; }
+        #answer, #ingestMsg, #msg { margin-top: 10px; padding: 12px; border-radius: 8px; background: #f8fafc; font-size: 14px; white-space: pre-wrap; }
     </style>
 </head>
 <body>
 
-    <h2>🧠 MyAI Assistant</h2>
+<div class="box">
+    <h2 style="margin-top:0; color:#0f172a;">📚 DocuAI Quick Portal</h2>
 
     <div id="loginDiv">
-        <input type="email" id="email" placeholder="Email">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="register()">Register</button>
-        <button onclick="login()">Login</button>
+        <input type="email" id="email" value="newuser@email.com" placeholder="Email">
+        <input type="password" id="password" value="securepass123" placeholder="Password">
+        <button onclick="login()">Log In</button>
         <div id="msg"></div>
     </div>
 
     <div id="appDiv" class="hidden">
-        <h3>✅ Logged in!</h3>
-        <textarea id="docText" rows="4" placeholder="Paste your document text here..."></textarea>
-        <button onclick="ingest()">Ingest Document</button>
+        <h3>1. Ingest Text</h3>
+        <input type="text" id="title" placeholder="Document Title (e.g. Overview)">
+        <textarea id="text" rows="4" placeholder="Document content..."></textarea>
+        <button onclick="ingest()">Ingest into Vector DB</button>
         <div id="ingestMsg"></div>
-        <hr>
-        <input type="text" id="question" placeholder="Ask a question...">
-        <button onclick="ask()">Ask</button>
+
+        <h3 style="margin-top: 25px;">2. Ask Question</h3>
+        <input type="text" id="question" placeholder="Ask question..." onkeydown="if(event.key==='Enter') ask()">
+        <button onclick="ask()">Ask DocuAI</button>
         <div id="answer"></div>
-        <br>
-        <button onclick="logout()" style="background:red;">Logout</button>
+
+        <button onclick="logout()" style="background:#ef4444; margin-top:25px;">Log Out</button>
     </div>
+</div>
 
-    <script>
-        // ==================== BACKEND URL ====================
-        const API = 'https://rag-backend-zrid.onrender.com';
-        let token = localStorage.getItem('token');
+<script>
+    const API = (window.location.protocol.startsWith('http')) ? window.location.origin : 'http://localhost:8000';
+    let token = localStorage.getItem('docuai_token');
 
-        if (token) {
-            showApp();
+    if (token) {
+        document.getElementById('loginDiv').classList.add('hidden');
+        document.getElementById('appDiv').classList.remove('hidden');
+    }
+
+    async function login() {
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        const msg = document.getElementById('msg');
+        msg.textContent = 'Authenticating...';
+
+        try {
+            const fd = new URLSearchParams();
+            fd.append('username', email);
+            fd.append('password', password);
+
+            const res = await fetch(API + '/auth/login', { method: 'POST', body: fd });
+            const data = await res.json();
+
+            if (res.ok) {
+                token = data.access_token;
+                localStorage.setItem('docuai_token', token);
+                msg.innerHTML = '<span class="success">✅ Login success!</span>';
+                setTimeout(() => {
+                    document.getElementById('loginDiv').classList.add('hidden');
+                    document.getElementById('appDiv').classList.remove('hidden');
+                }, 300);
+            } else {
+                msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Login failed') + '</span>';
+            }
+        } catch(e) {
+            msg.innerHTML = '<span class="error">❌ Backend unreachable at ' + API + '</span>';
         }
+    }
 
-        // ==================== REGISTER ====================
-        async function register() {
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            const msg = document.getElementById('msg');
+    async function ingest() {
+        const title = document.getElementById('title').value;
+        const text = document.getElementById('text').value;
+        const ingestMsg = document.getElementById('ingestMsg');
+        if (!title || !text) return alert("Title and text required");
 
-            if (!email || !password) {
-                msg.innerHTML = '<span class="error">Please enter email and password</span>';
-                return;
-            }
-
-            msg.innerHTML = '⏳ Registering...';
-
-            try {
-                const res = await fetch(API + '/auth/register', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({ email, password })
-                });
-
-                const data = await res.json();
-
-                if (res.ok) {
-                    msg.innerHTML = '<span class="success">✅ Registered successfully! Now login.</span>';
-                } else {
-                    msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Registration failed') + '</span>';
-                }
-            } catch (e) {
-                msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
-            }
+        ingestMsg.textContent = '⏳ Ingesting and embedding...';
+        try {
+            const docId = title.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+            const res = await fetch(API + '/ingest', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ document_id: docId, title: title, text: text })
+            });
+            const data = await res.json();
+            ingestMsg.innerHTML = '<span class="success">✅ Ingested (' + data.chunks + ' chunks)</span>';
+        } catch(e) {
+            ingestMsg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
         }
+    }
 
-        // ==================== LOGIN ====================
-        async function login() {
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            const msg = document.getElementById('msg');
+    async function ask() {
+        const question = document.getElementById('question').value;
+        const answerDiv = document.getElementById('answer');
+        if (!question) return;
 
-            if (!email || !password) {
-                msg.innerHTML = '<span class="error">Please enter email and password</span>';
-                return;
-            }
-
-            msg.innerHTML = '⏳ Logging in...';
-
-            try {
-                const fd = new URLSearchParams();
-                fd.append('username', email);
-                fd.append('password', password);
-
-                const res = await fetch(API + '/auth/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Accept': 'application/json'
-                    },
-                    body: fd
-                });
-
-                const data = await res.json();
-
-                if (res.ok) {
-                    token = data.access_token;
-                    localStorage.setItem('token', token);
-                    localStorage.setItem('user', email);
-                    msg.innerHTML = '<span class="success">✅ Login successful!</span>';
-                    setTimeout(showApp, 500);
-                } else {
-                    msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Login failed') + '</span>';
-                }
-            } catch (e) {
-                msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
-            }
+        answerDiv.textContent = '⏳ Querying...';
+        try {
+            const res = await fetch(API + '/query', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question })
+            });
+            const data = await res.json();
+            answerDiv.textContent = data.answer || 'No answer';
+        } catch(e) {
+            answerDiv.textContent = '❌ ' + e.message;
         }
+    }
 
-        // ==================== SHOW APP ====================
-        function showApp() {
-            document.getElementById('loginDiv').classList.add('hidden');
-            document.getElementById('appDiv').classList.remove('hidden');
-        }
-
-        // ==================== LOGOUT ====================
-        function logout() {
-            localStorage.removeItem('token');
-            localStorage.removeItem('user');
-            location.reload();
-        }
-
-        // ==================== INGEST ====================
-        async function ingest() {
-            const text = document.getElementById('docText').value;
-            const msg = document.getElementById('ingestMsg');
-
-            if (!text) {
-                msg.innerHTML = '<span class="error">Please enter text</span>';
-                return;
-            }
-
-            msg.innerHTML = '⏳ Ingesting...';
-
-            try {
-                const res = await fetch(API + '/ingest', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + token,
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        document_id: 'doc_' + Date.now(),
-                        title: 'Test Document',
-                        text: text
-                    })
-                });
-
-                const data = await res.json();
-
-                if (res.ok) {
-                    msg.innerHTML = '<span class="success">✅ ' + (data.status || 'Ingested!') + ' (' + (data.chunks || 0) + ' chunks)</span>';
-                } else {
-                    msg.innerHTML = '<span class="error">❌ ' + (data.detail || 'Ingest failed') + '</span>';
-                }
-            } catch (e) {
-                msg.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
-            }
-        }
-
-        // ==================== ASK ====================
-        async function ask() {
-            const question = document.getElementById('question').value;
-            const answerDiv = document.getElementById('answer');
-
-            if (!question) {
-                answerDiv.innerHTML = '<span class="error">Please enter a question</span>';
-                return;
-            }
-
-            answerDiv.innerHTML = '⏳ Thinking...';
-
-            try {
-                const res = await fetch(API + '/query', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + token,
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({ question })
-                });
-
-                const data = await res.json();
-
-                if (res.ok) {
-                    answerDiv.innerHTML = '📝 ' + (data.answer || 'No answer found');
-                } else {
-                    answerDiv.innerHTML = '<span class="error">❌ ' + (data.detail || 'Query failed') + '</span>';
-                }
-            } catch (e) {
-                answerDiv.innerHTML = '<span class="error">❌ ' + e.message + '</span>';
-            }
-        }
-    </script>
+    function logout() {
+        localStorage.removeItem('docuai_token');
+        location.reload();
+    }
+</script>
 
 </body>
 </html>
