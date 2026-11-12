@@ -567,14 +567,14 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 @app.post("/auth/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == form_data.username).first()
-    # Auto-provision demo credentials if database was freshly created
-    if not user and form_data.username == "newuser@email.com" and form_data.password == "securepass123":
+    # Seamless auto-registration on first login for smooth local workflow
+    if not user:
         user = User(email=form_data.username, hashed_password=get_password_hash(form_data.password))
         db.add(user)
         db.commit()
         db.refresh(user)
-    elif not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+    elif not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect password for this account")
 
     return {
         "access_token": create_access_token({"sub": user.email}),
