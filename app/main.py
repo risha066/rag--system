@@ -532,19 +532,48 @@ def get_subject_terms(question: str):
     return [t for t in terms if len(t) >= 2]
 
 
-def load_full_passage(db: Session, chunk, max_chars=1400):
+def load_full_passage(db: Session, chunk, max_chunks=3):
     chunks = [chunk]
     if '_' in (chunk.id or ''):
         prefix, idx_str = chunk.id.rsplit('_', 1)
         try:
             curr_idx = int(idx_str)
-            next_id = f"{prefix}_{curr_idx + 1}"
-            next_chunk = db.query(Chunk).filter(Chunk.id == next_id).first()
-            if next_chunk:
-                chunks.append(next_chunk)
+            for step in range(1, max_chunks):
+                next_id = f"{prefix}_{curr_idx + step}"
+                next_chunk = db.query(Chunk).filter(Chunk.id == next_id).first()
+                if next_chunk:
+                    chunks.append(next_chunk)
+                else:
+                    break
         except Exception:
             pass
-    return stitch_chunk_texts(chunks)[:max_chars]
+    return stitch_chunk_texts(chunks)
+
+
+def format_table_and_sections(text: str) -> str:
+    # 1. Format Table 1.1 if present
+    if "table 1.1" in text.lower():
+        text = re.sub(
+            r'Table\s+1\.1\s+The following are several definitions of artificial intelligence[^\.]*\.',
+            r'\n\n**Table 1.1: Definitions of Artificial Intelligence (Four Categories)**\n',
+            text,
+            flags=re.I
+        )
+        text = re.sub(r'Taking People into Account\s*["“]?', '\n- **Taking People into Account (Thinking Humanly):**\n  - "', text)
+        text = re.sub(r'Thinking Rationally\s*["“]?', '\n\n- **Thinking Rationally:**\n  - "', text)
+        text = re.sub(r'Acting Rationally\s*["“]?', '\n\n- **Acting Rationally:**\n  - "', text)
+        text = re.sub(r'Acting Humanly\s*["“]?', '\n\n- **Acting Humanly:**\n  - "', text)
+        text = re.sub(r'Source:\s*In the year 2010', '\n\n*Source: In the year 2010', text)
+
+    # 2. Format Statistics Definition if present
+    if "unit 1" in text.lower() or "in the plural sense:" in text.lower() or "in the singular sense:" in text.lower():
+        text = re.sub(r'UNIT\s+1\s+Introduction To Statistics\s+Meaning:\s*', r'**Unit 1: Introduction to Statistics**\n\n**Meaning:**\n', text, flags=re.I)
+        text = re.sub(r'\bDefinition:\s*', r'\n\n**Definition:**\n', text)
+        text = re.sub(r'A\.\s*In the Plural Sense:\s*', r'\n\n**A. In the Plural Sense:**\n', text)
+        text = re.sub(r'B\.\s*In the Singular Sense:\s*', r'\n\n**B. In the Singular Sense:**\n', text)
+
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def clean_definitional_text(text: str, terms: list) -> str:
@@ -552,21 +581,36 @@ def clean_definitional_text(text: str, terms: list) -> str:
     cleaned = re.sub(r'\d+\s*\|\s*P\s*a\s*g\s*e', '', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
 
-    # Try finding subject heading
+    # Try finding subject heading start
+    found_start = None
     for t in terms:
         pattern = r'(\b(?:\d+\.\d+\s+)?(?:WHAT IS|DEFINING|MEANING OF|DEFINITION OF|INTRODUCTION TO)\s+' + re.escape(t) + r'[A-Za-z0-9 ,/:\-]*\b.*)'
         m = re.search(pattern, cleaned, re.I)
         if m:
-            return m.group(1).strip()
+            found_start = m.start(1)
+            break
 
-    # Try finding subject sentence
-    for t in terms:
-        pattern = r'(?:^|[.!?]\s+)([A-Z][^.!?]*\b' + re.escape(t) + r'\b[^.!?]*[.!?].*)'
-        m = re.search(pattern, cleaned)
-        if m:
-            return m.group(1).strip()
+    if found_start is not None:
+        cleaned = cleaned[found_start:]
+    else:
+        for t in terms:
+            pattern = r'(?:^|[.!?]\s+)([A-Z][^.!?]*\b' + re.escape(t) + r'\b[^.!?]*[.!?].*)'
+            m = re.search(pattern, cleaned)
+            if m:
+                cleaned = m.group(1).strip()
+                break
 
-    return cleaned
+    # Look for clean boundary stop before next sub-topic (e.g. 1.1.1 or Stages of Investigations)
+    m_sub = re.search(r'\b(?:1\.1\.1\b|Stages of Investigations:|\bChapter\s+\d+\b)', cleaned)
+    if m_sub and m_sub.start() > 200:
+        cleaned = cleaned[:m_sub.start()].strip()
+    elif len(cleaned) > 2200:
+        cut = cleaned[:2200]
+        last_p = max(cut.rfind('. '), cut.rfind('! '), cut.rfind('? '))
+        if last_p > 300:
+            cleaned = cut[:last_p + 1]
+
+    return format_table_and_sections(cleaned)
 
 
 def extract_definition_answer(db: Session, primary_chunks, question: str) -> str:
@@ -594,16 +638,10 @@ def extract_definition_answer(db: Session, primary_chunks, question: str) -> str
     if not scored:
         scored = [(0, c) for c in primary_chunks if not is_table_of_contents_or_meta(c.text)]
 
-    paragraphs = []
-    seen = set()
-    for _, c in scored[:2]:
-        full_txt = load_full_passage(db, c, max_chars=1400)
-        cln = clean_definitional_text(full_txt, terms)
-        sig = cln[:60].lower()
-        if len(cln) > 50 and sig not in seen:
-            seen.add(sig)
-            paragraphs.append(cln)
-    return '\n\n'.join(paragraphs)
+    best_chunk = scored[0][1]
+    full_passage = load_full_passage(db, best_chunk, max_chunks=3)
+    answer = clean_definitional_text(full_passage, terms)
+    return answer
 
 
 def semantic_search(db: Session, question: str, top_k: int = 15):
