@@ -1,26 +1,25 @@
 # 📚 MyAI Assistant (Document Intelligence RAG)
 
-A full-stack Retrieval-Augmented Generation (RAG) system that allows users to upload PDF documents and ask natural language questions, receiving grounded answers with citations.
+A full-stack Retrieval-Augmented Generation (RAG) system that allows users to upload PDF/DOCX/TXT documents and ask natural language questions, receiving grounded answers with exact source citations.
 
-> **Note on Deployment:** The live servers (Vercel/Render) have been taken down to preserve resources and data privacy. The entire application is fully Dockerized and can be run locally in under 2 minutes.
+> **Note on Deployment:** The live cloud servers have been taken down to preserve resources. The entire application is fully ready to run locally in under 2 minutes (see instructions below).
 
 ## 🚀 Features
-* **Document Ingestion:** Upload PDFs and automatically chunk/embed text.
-* **Hybrid Retrieval:** Combines Neo4j (Knowledge Graph) and PostgreSQL/pgvector (Vector Search) for highly accurate context retrieval.
-* **Local Embeddings:** Uses `fastembed` so no OpenAI keys are needed (100% free).
-* **Fast Inference:** Utilizes Groq API (Llama 3) for blazing-fast answer generation.
-* **Citation Validation:** The LLM must cite its sources, reducing hallucinations.
+* **Document Ingestion:** Upload PDFs, DOCX, or TXT files and paste raw text. The backend automatically chunks the text and generates embeddings.
+* **Semantic Search:** Uses `sentence-transformers` (MiniLM) to convert text into 384-dimensional vectors for highly accurate context retrieval.
+* **Fast Inference:** Utilizes the Groq API (`openai/gpt-oss-20b`) for blazing-fast, precise answer generation.
+* **Accurate Citations:** The LLM is strictly prompted to answer *only* from the retrieved context and lists the exact source document at the end.
+* **JWT Authentication:** Secure user registration and login so each user only sees their own documents.
 
 ## 🛠️ Tech Stack
-* **Frontend:** HTML, CSS, JavaScript
-* **Backend:** FastAPI (Python 3.12)
-* **Databases:** Neo4j (Graph), PostgreSQL with pgvector (Vector)
-* **AI/LLM:** Groq API (Llama 3.3), Fastembed (MiniLM)
-* **Infrastructure:** Docker, Docker Compose
+* **Frontend:** HTML, CSS, Vanilla JavaScript
+* **Backend:** FastAPI (Python 3.11), Uvicorn
+* **Database:** SQLite + SQLAlchemy (Lightweight, zero-config storage for embeddings and users)
+* **AI/LLM:** Groq API (`openai/gpt-oss-20b`), HuggingFace `sentence-transformers`
 
 ## 🏃‍♂️ How to Run Locally
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/risha066/rag-system.git
-cd rag-system
+git clone https://github.com/risha066/rag--system.git
+cd rag--system
