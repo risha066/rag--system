@@ -490,24 +490,147 @@ def expand_list_context(db: Session, chunks, question: str):
     return result
 
 
+# ================= QUERY EXPANSION & ACRONYMS =================
+ACRONYM_MAP = {
+    "ai": "artificial intelligence",
+    "ml": "machine learning",
+    "nlp": "natural language processing",
+    "dl": "deep learning",
+    "stats": "statistics"
+}
+
+def expand_query(q: str) -> str:
+    words = re.findall(r'\b\w+\b', (q or '').lower())
+    expanded = list(words)
+    for w in words:
+        if w in ACRONYM_MAP:
+            expanded.append(ACRONYM_MAP[w])
+    return " ".join(expanded)
+
+
+def is_table_of_contents_or_meta(text: str) -> bool:
+    if not text:
+        return False
+    lower = text.lower()
+    if ("chapter no." in lower and "page no." in lower) or "table of contents" in lower:
+        return True
+    section_markers = len(re.findall(r'\b\d+\.\d+\s+[A-Z]', text))
+    if section_markers >= 4:
+        return True
+    return False
+
+
+def get_subject_terms(question: str):
+    words = [w.lower() for w in re.findall(r'\b\w+\b', question) if w.lower() not in STOP_WORDS and w.lower() not in ['what', 'is', 'are', 'the', 'definition', 'meaning', 'defined', 'explain', 'describe']]
+    terms = list(words)
+    for w in words:
+        if w in ACRONYM_MAP:
+            terms.append(ACRONYM_MAP[w])
+    joined = ' '.join(words)
+    if joined and joined not in terms:
+        terms.append(joined)
+    return [t for t in terms if len(t) >= 2]
+
+
+def load_full_passage(db: Session, chunk, max_chars=1400):
+    chunks = [chunk]
+    if '_' in (chunk.id or ''):
+        prefix, idx_str = chunk.id.rsplit('_', 1)
+        try:
+            curr_idx = int(idx_str)
+            next_id = f"{prefix}_{curr_idx + 1}"
+            next_chunk = db.query(Chunk).filter(Chunk.id == next_id).first()
+            if next_chunk:
+                chunks.append(next_chunk)
+        except Exception:
+            pass
+    return stitch_chunk_texts(chunks)[:max_chars]
+
+
+def clean_definitional_text(text: str, terms: list) -> str:
+    cleaned = re.sub(r'Title:\s*[\w\.\-]+\s*ID:\s*[\w\.\-]+', '', text or '')
+    cleaned = re.sub(r'\d+\s*\|\s*P\s*a\s*g\s*e', '', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    # Try finding subject heading
+    for t in terms:
+        pattern = r'(\b(?:\d+\.\d+\s+)?(?:WHAT IS|DEFINING|MEANING OF|DEFINITION OF|INTRODUCTION TO)\s+' + re.escape(t) + r'[A-Za-z0-9 ,/:\-]*\b.*)'
+        m = re.search(pattern, cleaned, re.I)
+        if m:
+            return m.group(1).strip()
+
+    # Try finding subject sentence
+    for t in terms:
+        pattern = r'(?:^|[.!?]\s+)([A-Z][^.!?]*\b' + re.escape(t) + r'\b[^.!?]*[.!?].*)'
+        m = re.search(pattern, cleaned)
+        if m:
+            return m.group(1).strip()
+
+    return cleaned
+
+
+def extract_definition_answer(db: Session, primary_chunks, question: str) -> str:
+    terms = get_subject_terms(question)
+    scored = []
+    for c in primary_chunks:
+        if is_table_of_contents_or_meta(c.text):
+            continue
+        txt = c.text or ''
+        sc = 0
+        for t in terms:
+            if re.search(r'\b(?:what is|defining|meaning of|definition of|introduction to)\s+' + re.escape(t) + r'\b', txt, re.I):
+                sc += 35
+            if re.search(r'\b' + re.escape(t) + r'\s+(?:is defined as|refers to|means|is a technology|is a branch|is considered|encompasses)\b', txt, re.I):
+                sc += 25
+            if re.search(r'\b' + re.escape(t) + r'\s*\([^)]*\)\s+is\b', txt, re.I):
+                sc += 25
+            if re.search(r'\b(?:meaning|definition)\s*:\s*["\']?' + re.escape(t) + r'\b', txt, re.I):
+                sc += 25
+            if re.search(r'\b' + re.escape(t) + r'\b', txt, re.I):
+                sc += 2
+        if sc > 0:
+            scored.append((sc, c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    if not scored:
+        scored = [(0, c) for c in primary_chunks if not is_table_of_contents_or_meta(c.text)]
+
+    paragraphs = []
+    seen = set()
+    for _, c in scored[:2]:
+        full_txt = load_full_passage(db, c, max_chars=1400)
+        cln = clean_definitional_text(full_txt, terms)
+        sig = cln[:60].lower()
+        if len(cln) > 50 and sig not in seen:
+            seen.add(sig)
+            paragraphs.append(cln)
+    return '\n\n'.join(paragraphs)
+
+
 def semantic_search(db: Session, question: str, top_k: int = 15):
     chunks = db.query(Chunk).filter(Chunk.embedding.isnot(None)).all()
     if not chunks:
         return []
-    q_vec = embed(question)
+
+    expanded_q = expand_query(question)
+    q_vec = embed(expanded_q)
     q_clean = question.lower().strip()
-    q_words = [w.lower() for w in re.findall(r"\w+", question) if len(w) > 2]
+    q_words = [w.lower() for w in re.findall(r"\b\w+\b", expanded_q) if len(w) >= 2 and w not in STOP_WORDS]
 
     scored = []
     for c in chunks:
+        if is_table_of_contents_or_meta(c.text):
+            continue
         try:
             sim = cosine(q_vec, c.embedding)
             c_text_lower = (c.text or "").lower()
 
-            # 1. Exact phrase & heading section boost
+            # 1. Exact phrase & acronym boost
             phrase_boost = 0.0
             if q_clean in c_text_lower:
-                phrase_boost = 1.6
+                phrase_boost += 1.5
+            if "artificial intelligence" in c_text_lower and "ai" in q_clean:
+                phrase_boost += 1.0
+
             sec_sc = score_section(question, c_text_lower[:220], c_text_lower[:400])
             if sec_sc > 0:
                 phrase_boost += 0.15 * sec_sc
@@ -516,12 +639,12 @@ def semantic_search(db: Session, question: str, top_k: int = 15):
 
             # Definitional boost for what is / definition questions
             if bool(DEFINITION_Q_RE.search(question)):
-                if any(k in c_text_lower for k in ["meaning:", "definition:", "is defined as", "refers to", "derived from", "concept of"]):
-                    phrase_boost += 1.5
+                if any(k in c_text_lower for k in ["meaning:", "definition:", "is defined as", "refers to", "derived from", "concept of", "defining"]):
+                    phrase_boost += 0.8
 
-            # 2. Keyword boost
-            keyword_matches = sum(1 for w in q_words if w in c_text_lower)
-            word_boost = (keyword_matches / max(len(q_words), 1)) * 0.4
+            # 2. Keyword boost using word boundaries
+            kw_hits = sum(1 for w in q_words if re.search(r'\b' + re.escape(w) + r'\b', c_text_lower))
+            word_boost = (kw_hits / max(len(q_words), 1)) * 0.4
 
             total = sim + phrase_boost + word_boost
             scored.append((total, c))
@@ -728,54 +851,36 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
     if not chunks:
         return {"answer": "No relevant documents found. Please ingest or upload documents first."}
 
-    doc_ids = []
-    seen = set()
-    for c in chunks:
-        if c.document_id and c.document_id not in seen:
-            seen.add(c.document_id)
-            doc_ids.append(c.document_id)
+    # 1. Identify the primary matching document from top search result
+    primary_doc_id = chunks[0].document_id
+    primary_chunks = [c for c in chunks if c.document_id == primary_doc_id]
+    doc_title = primary_chunks[0].title or primary_doc_id
+    source_line = f"\n\n📚 Sources: {doc_title}"
 
+    q_lower = (req.question or "").lower()
+    is_list_q = bool(LIST_QUESTION_RE.search(q_lower))
+    is_def_q = bool(DEFINITION_Q_RE.search(q_lower))
+
+    # 2. Check for high-confidence structured list / heading section strictly within target document
     best_section = None
-    used_chunks = []
-    for doc_id in doc_ids[:4]:
-        doc_chunks = load_document_chunks(db, doc_id)
+    if is_list_q:
+        doc_chunks = load_document_chunks(db, primary_doc_id)
         stitched_doc = stitch_chunk_texts(doc_chunks)
-        section = select_matching_section(stitched_doc, req.question)
-        if section and (best_section is None or section["score"] > best_section["score"]):
-            best_section = section
-            used_chunks = doc_chunks
+        best_section = select_matching_section(stitched_doc, req.question)
+        if best_section and best_section.get("points") and best_section["score"] >= 20:
+            answer = format_section_answer(best_section)
+            if answer.strip():
+                return {"answer": answer + source_line}
 
-    if used_chunks:
-        unique_sources = list(dict.fromkeys([(c.title or c.document_id) for c in used_chunks]))
-    else:
-        unique_sources = list(dict.fromkeys([(c.title or c.document_id) for c in chunks]))
-    source_line = f"\n\n📚 Sources: {', '.join(unique_sources)}"
+    # 3. Check for high-confidence definitional answer strictly within target document
+    if is_def_q and not is_list_q:
+        doc_chunks = load_document_chunks(db, primary_doc_id)
+        def_answer = extract_definition_answer(db, doc_chunks, req.question)
+        if def_answer.strip():
+            return {"answer": def_answer + source_line}
 
-    is_list_q = bool(LIST_QUESTION_RE.search(req.question or ""))
-    is_def_q = bool(DEFINITION_Q_RE.search(req.question or ""))
-
-    # High-confidence direct section returns:
-    # 1. Exact list request (functions, limitations, characteristics, advantages...)
-    if is_list_q and best_section and best_section.get("points") and best_section["score"] >= 20:
-        answer = format_section_answer(best_section)
-        if answer.strip():
-            return {"answer": answer + source_line}
-
-    # 2. Definitional request (what is ..., meaning of ..., definition of ...)
-    if is_def_q and not is_list_q and best_section and best_section["score"] >= 25 and not best_section.get("points"):
-        answer = format_section_answer(best_section)
-        if answer.strip():
-            return {"answer": answer + source_line}
-
-    primary_text = format_section_answer(best_section) if best_section and best_section["score"] > 0 else ""
-    all_chunks_to_use = used_chunks if used_chunks else expand_list_context(db, chunks, req.question)
-    other_context = stitch_chunk_texts(all_chunks_to_use) if all_chunks_to_use else "\n\n".join(
-        f"[Source {i} - {c.title or c.document_id}]\n{c.text}"
-        for i, c in enumerate(chunks, 1)
-    )
-    context = f"{primary_text}\n\n{other_context}".strip() if primary_text else other_context
-    unique_sources = list(dict.fromkeys([(c.title or c.document_id) for c in all_chunks_to_use or chunks]))
-    source_line = f"\n\n📚 Sources: {', '.join(unique_sources)}"
+    # 4. Compile context from the primary document
+    primary_context = "\n\n".join(c.text for c in primary_chunks[:6])
 
     groq_client = get_groq_client()
     if groq_client:
@@ -783,10 +888,10 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
             "You are DocuAI, an intelligent document QA assistant. "
             "Answer using ONLY the provided document context. Be comprehensive, precise, and faithful. "
             "If the question asks for functions or specific points, include all points clearly without omitting later ones. "
-            "If the question asks for a definition or meaning, explain the concept accurately without diverting into functions or limitations. "
+            "If the question asks for a definition or meaning, explain the concept accurately without diverting into unrelated sections. "
             "If the context does not contain the answer, state that clearly."
         )
-        user = f"Context:\n{context}\n\nQuestion: {req.question}\n\nComplete answer from context:"
+        user = f"Context from '{doc_title}':\n{primary_context}\n\nQuestion: {req.question}\n\nComplete and accurate answer:"
         models_to_try = [
             os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             "llama-3.1-8b-instant",
@@ -809,14 +914,11 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
             except Exception:
                 continue
 
-    # Fallback when Groq API key is not configured or offline:
-    # Use the best matching section if available
-    if best_section and best_section["score"] > 0:
-        answer = format_section_answer(best_section)
-        if answer.strip():
-            return {"answer": answer + source_line}
-
-    return {"answer": f"Relevant document excerpts:\n\n{context[:3500]}{source_line}"}
+    # 5. Fallback when Groq API key is not configured or offline:
+    # Return cleaned passage excerpts from the primary document
+    doc_passages = [clean_definitional_text(load_full_passage(db, c, max_chars=1200), get_subject_terms(req.question)) for c in primary_chunks[:3]]
+    joined_passages = "\n\n".join(p for p in doc_passages if len(p) > 40)
+    return {"answer": f"{joined_passages or primary_context[:3500]}{source_line}"}
 
 
 @app.get("/documents")
