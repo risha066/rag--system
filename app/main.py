@@ -201,27 +201,42 @@ class QueryRequest(BaseModel):
 
 # ================= TEXT PROCESSING & SECTION MATCHING =================
 ITEM_SPLIT_RE = re.compile(r'(?:(?<=^)|(?<=[\s;]))(\d{1,2})\s*[.)]\s+')
-SECTION_HEAD_RE = re.compile(
-    r'((?:Functions?|Limitations?|Characteristics?|Advantages?|Disadvantages?|'
-    r'Importance|Uses?|Definitions?|Types?|Objectives?|Merits?|Demerits?|'
-    r'Features?|Role|Meaning|Scope|Nature|Methods?)\s+of\s+[A-Za-z][A-Za-z ]{0,40}?)\s*:',
-    re.I,
-)
-STOP_WORDS = {
-    "the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are",
-    "what", "explain", "list", "give", "write", "all", "about", "with",
+
+CATEGORY_KEYWORDS = {
+    "function": {"function", "functions", "role", "roles", "purpose", "purposes", "objective", "objectives", "task", "tasks", "uses"},
+    "limitation": {"limitation", "limitations", "drawback", "drawbacks", "demerit", "demerits", "defect", "defects", "disadvantage", "disadvantages", "weakness", "weaknesses"},
+    "advantage": {"advantage", "advantages", "merit", "merits", "benefit", "benefits"},
+    "characteristic": {"characteristic", "characteristics", "feature", "features", "nature", "property", "properties"},
+    "definition": {"definition", "definitions", "meaning", "define", "what is", "concept", "origin", "introduction"}
 }
-TOPIC_CONFLICTS = [
-    ({"function"}, {"limitation", "demerit", "drawback", "defect", "disadvantage"}),
-    ({"advantage", "merit"}, {"disadvantage", "demerit", "limitation"}),
-    ({"use"}, {"limitation", "misuse", "abuse"}),
-]
+
 LIST_QUESTION_RE = re.compile(
     r"\b(function|functions|characteristic|characteristics|type|types|point|points|"
     r"advantage|advantages|disadvantage|disadvantages|step|steps|feature|features|"
-    r"principle|principles|list|enumerate|explain all|all the)\b",
+    r"principle|principles|merit|merits|demerit|demerits|limitation|limitations|list|enumerate|explain all|all the)\b",
     re.I,
 )
+
+DEFINITION_Q_RE = re.compile(
+    r"\b(what is|what are|define|definition|meaning of|what do you mean by|explain|describe)\b",
+    re.I
+)
+
+HEADING_WORDS = (
+    "Functions?|Limitations?|Characteristics?|Advantages?|Disadvantages?|"
+    "Importance|Uses?|Definitions?|Types?|Objectives?|Merits?|Demerits?|"
+    "Features?|Role|Meaning|Scope|Nature|Methods?|Introduction"
+)
+
+HEADING_RE = re.compile(
+    rf"((?:{HEADING_WORDS})(?:\s+(?:of|and|in|to)\s+[A-Za-z0-9 ]{{1,35}})?)\s*(?::|(?=\s+\d{{1,2}}\.\s+[A-Za-z]))",
+    re.I
+)
+
+STOP_WORDS = {
+    "the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are",
+    "what", "explain", "list", "give", "write", "all", "about", "with", "tell", "me"
+}
 NUM_ITEM_RE = re.compile(r"(?:^|[^\d])(?:\(|\[)?(\d{1,2})(?:\)|\.|:)\s")
 
 
@@ -240,21 +255,51 @@ def _stems(text: str) -> set:
 
 
 def score_section(question: str, heading: str, preview: str = "") -> float:
-    q = _stems(question)
-    h = _stems(f"{heading} {preview}")
-    if not q:
-        return 0.0
-    score = len(q & h) * 4.0
-    qn = (question or "").lower()
-    hn = f"{heading} {preview}".lower()
-    if qn.strip() in hn:
-        score += 12.0
-    for pos, neg in TOPIC_CONFLICTS:
-        if q & pos:
-            if h & pos:
-                score += 10.0
-            if h & neg:
-                score -= 12.0
+    q_lower = (question or "").lower()
+    h_lower = (heading or "").lower()
+    p_lower = (preview or "").lower()
+
+    q_stems = _stems(question)
+    h_stems = _stems(heading)
+    p_stems = _stems(preview[:220])
+
+    q_categories = set()
+    for cat, kws in CATEGORY_KEYWORDS.items():
+        if any(kw in q_lower for kw in kws):
+            q_categories.add(cat)
+
+    is_def_q = bool(DEFINITION_Q_RE.search(q_lower))
+    if is_def_q and not (q_categories - {"definition"}):
+        q_categories.add("definition")
+
+    h_categories = set()
+    for cat, kws in CATEGORY_KEYWORDS.items():
+        if any(kw in h_lower for kw in kws):
+            h_categories.add(cat)
+
+    cat_all_words = set().union(*CATEGORY_KEYWORDS.values())
+    topic_q = {w for w in q_stems if w not in cat_all_words}
+    topic_h = {w for w in h_stems if w not in cat_all_words}
+
+    # If question is about a specific topic (e.g. statistics), heading or preview must touch it
+    if topic_q and not (topic_q & (topic_h | p_stems)):
+        return -50.0
+
+    # Cross-category rejection (e.g. asking for definition should not match functions or limitations)
+    if h_categories and q_categories:
+        if not (h_categories & q_categories):
+            return -30.0
+
+    score = 0.0
+    if h_categories & q_categories:
+        score += 30.0
+
+    if topic_q & topic_h:
+        score += 15.0
+
+    if q_lower.strip() in f"{h_lower} {p_lower}":
+        score += 15.0
+
     return score
 
 
@@ -311,37 +356,30 @@ def _parse_numbered_items(text: str):
 
 def extract_numbered_points(text: str):
     items = _parse_numbered_items(text)
-    best, run, expected = [], [], None
-    for n, content, _ in items:
-        if n == 1:
-            if len(run) > len(best):
-                best = run
-            run = [(n, content)]
-            expected = 2
-        elif expected is not None and n == expected:
-            run.append((n, content))
-            expected = n + 1
-        else:
-            if len(run) > len(best):
-                best = run
-            run, expected = [], None
-            if n == 1:
-                run = [(n, content)]
-                expected = 2
-    if len(run) > len(best):
-        best = run
-    return best
+    if not items:
+        return []
+    # Deduplicate repeated items (e.g. repeated numbers or OCR duplicated points)
+    points = []
+    seen = set()
+    for num, content, _ in items:
+        if num in seen:
+            continue
+        seen.add(num)
+        points.append((num, content))
+    return points
 
 
 def extract_heading_sections(text: str):
-    """Split notes into heading sections such as Functions of Statistics vs Limitations."""
+    """Split notes into heading sections accurately whether headings end in colons or numbers."""
     text = text or ""
-    marks = list(SECTION_HEAD_RE.finditer(text))
+    marks = list(HEADING_RE.finditer(text))
     sections = []
     for i, m in enumerate(marks):
+        start = m.end()
         end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
-        body = text[m.end():end].strip()
-        sections.append({"heading": re.sub(r"\s+", " ", m.group(1)).strip(" :"), "body": body})
+        h = re.sub(r"\s+", " ", m.group(1)).strip(" :;.")
+        body = text[start:end].strip()
+        sections.append({"heading": h, "body": body})
     return sections
 
 
@@ -470,9 +508,16 @@ def semantic_search(db: Session, question: str, top_k: int = 15):
             phrase_boost = 0.0
             if q_clean in c_text_lower:
                 phrase_boost = 1.6
-            sec_sc = score_section(question, c_text_lower[:220])
+            sec_sc = score_section(question, c_text_lower[:220], c_text_lower[:400])
             if sec_sc > 0:
                 phrase_boost += 0.15 * sec_sc
+            elif sec_sc < -20:
+                phrase_boost -= 0.5
+
+            # Definitional boost for what is / definition questions
+            if bool(DEFINITION_Q_RE.search(question)):
+                if any(k in c_text_lower for k in ["meaning:", "definition:", "is defined as", "refers to", "derived from", "concept of"]):
+                    phrase_boost += 1.5
 
             # 2. Keyword boost
             keyword_matches = sum(1 for w in q_words if w in c_text_lower)
@@ -707,16 +752,28 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
     source_line = f"\n\n📚 Sources: {', '.join(unique_sources)}"
 
     is_list_q = bool(LIST_QUESTION_RE.search(req.question or ""))
-    if best_section and (is_list_q or (best_section.get("points") and best_section["score"] >= 8)):
+    is_def_q = bool(DEFINITION_Q_RE.search(req.question or ""))
+
+    # High-confidence direct section returns:
+    # 1. Exact list request (functions, limitations, characteristics, advantages...)
+    if is_list_q and best_section and best_section.get("points") and best_section["score"] >= 20:
         answer = format_section_answer(best_section)
         if answer.strip():
             return {"answer": answer + source_line}
 
+    # 2. Definitional request (what is ..., meaning of ..., definition of ...)
+    if is_def_q and not is_list_q and best_section and best_section["score"] >= 25 and not best_section.get("points"):
+        answer = format_section_answer(best_section)
+        if answer.strip():
+            return {"answer": answer + source_line}
+
+    primary_text = format_section_answer(best_section) if best_section and best_section["score"] > 0 else ""
     all_chunks_to_use = used_chunks if used_chunks else expand_list_context(db, chunks, req.question)
-    context = stitch_chunk_texts(all_chunks_to_use) if all_chunks_to_use else "\n\n".join(
+    other_context = stitch_chunk_texts(all_chunks_to_use) if all_chunks_to_use else "\n\n".join(
         f"[Source {i} - {c.title or c.document_id}]\n{c.text}"
         for i, c in enumerate(chunks, 1)
     )
+    context = f"{primary_text}\n\n{other_context}".strip() if primary_text else other_context
     unique_sources = list(dict.fromkeys([(c.title or c.document_id) for c in all_chunks_to_use or chunks]))
     source_line = f"\n\n📚 Sources: {', '.join(unique_sources)}"
 
@@ -726,6 +783,7 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
             "You are DocuAI, an intelligent document QA assistant. "
             "Answer using ONLY the provided document context. Be comprehensive, precise, and faithful. "
             "If the question asks for functions or specific points, include all points clearly without omitting later ones. "
+            "If the question asks for a definition or meaning, explain the concept accurately without diverting into functions or limitations. "
             "If the context does not contain the answer, state that clearly."
         )
         user = f"Context:\n{context}\n\nQuestion: {req.question}\n\nComplete answer from context:"
@@ -751,7 +809,13 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
             except Exception:
                 continue
 
-    # Fallback when Groq API key is not configured or offline
+    # Fallback when Groq API key is not configured or offline:
+    # Use the best matching section if available
+    if best_section and best_section["score"] > 0:
+        answer = format_section_answer(best_section)
+        if answer.strip():
+            return {"answer": answer + source_line}
+
     return {"answer": f"Relevant document excerpts:\n\n{context[:3500]}{source_line}"}
 
 
