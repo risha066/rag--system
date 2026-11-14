@@ -218,9 +218,27 @@ LIST_QUESTION_RE = re.compile(
 )
 
 DEFINITION_Q_RE = re.compile(
-    r"\b(what is|what are|define|definition|meaning of|what do you mean by|explain|describe)\b",
+    r"\b(what is|what are|what's|whats|wt is|wts|wat is|wats|wot is|define|definition|meaning of|meaning|what do you mean by|explain|describe|concept of|tell me about|intro to|introduction to)\b",
     re.I
 )
+
+SLANG_MAP = {
+    r'\bwt\s+is\b': 'what is',
+    r'\bwts\b': 'what is',
+    r'\bwhats\b': 'what is',
+    r'\bwhat\'s\b': 'what is',
+    r'\bwat\s+is\b': 'what is',
+    r'\bwot\s+is\b': 'what is',
+    r'\bwats\b': 'what is',
+    r'\bplz\b': 'please',
+    r'\bpls\b': 'please',
+}
+
+def normalize_question(q: str) -> str:
+    res = (q or '').strip()
+    for pattern, repl in SLANG_MAP.items():
+        res = re.sub(pattern, repl, res, flags=re.I)
+    return res
 
 HEADING_WORDS = (
     "Functions?|Limitations?|Characteristics?|Advantages?|Disadvantages?|"
@@ -532,7 +550,7 @@ def get_subject_terms(question: str):
     return [t for t in terms if len(t) >= 2]
 
 
-def load_full_passage(db: Session, chunk, max_chunks=3):
+def load_full_passage(db: Session, chunk, max_chunks: int = 3, max_chars: int = None, **kwargs):
     chunks = [chunk]
     if '_' in (chunk.id or ''):
         prefix, idx_str = chunk.id.rsplit('_', 1)
@@ -547,7 +565,13 @@ def load_full_passage(db: Session, chunk, max_chunks=3):
                     break
         except Exception:
             pass
-    return stitch_chunk_texts(chunks)
+    stitched = stitch_chunk_texts(chunks)
+    if max_chars and len(stitched) > max_chars:
+        cut = stitched[:max_chars]
+        last_space = cut.rfind(' ')
+        if last_space > 200:
+            stitched = cut[:last_space]
+    return stitched
 
 
 def format_table_and_sections(text: str) -> str:
@@ -885,78 +909,87 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
-    chunks = semantic_search(db, req.question, top_k=20)
+    clean_q = normalize_question(req.question or "")
+    chunks = semantic_search(db, clean_q, top_k=20)
     if not chunks:
         return {"answer": "No relevant documents found. Please ingest or upload documents first."}
 
-    # 1. Identify the primary matching document from top search result
-    primary_doc_id = chunks[0].document_id
-    primary_chunks = [c for c in chunks if c.document_id == primary_doc_id]
-    doc_title = primary_chunks[0].title or primary_doc_id
-    source_line = f"\n\n📚 Sources: {doc_title}"
+    try:
+        # 1. Identify the primary matching document from top search result
+        primary_doc_id = chunks[0].document_id
+        primary_chunks = [c for c in chunks if c.document_id == primary_doc_id]
+        doc_title = primary_chunks[0].title or primary_doc_id
+        source_line = f"\n\n📚 Sources: {doc_title}"
 
-    q_lower = (req.question or "").lower()
-    is_list_q = bool(LIST_QUESTION_RE.search(q_lower))
-    is_def_q = bool(DEFINITION_Q_RE.search(q_lower))
+        q_lower = clean_q.lower()
+        is_list_q = bool(LIST_QUESTION_RE.search(q_lower))
+        is_def_q = bool(DEFINITION_Q_RE.search(q_lower))
 
-    # 2. Check for high-confidence structured list / heading section strictly within target document
-    best_section = None
-    if is_list_q:
-        doc_chunks = load_document_chunks(db, primary_doc_id)
-        stitched_doc = stitch_chunk_texts(doc_chunks)
-        best_section = select_matching_section(stitched_doc, req.question)
-        if best_section and best_section.get("points") and best_section["score"] >= 20:
-            answer = format_section_answer(best_section)
-            if answer.strip():
-                return {"answer": answer + source_line}
-
-    # 3. Check for high-confidence definitional answer strictly within target document
-    if is_def_q and not is_list_q:
-        doc_chunks = load_document_chunks(db, primary_doc_id)
-        def_answer = extract_definition_answer(db, doc_chunks, req.question)
-        if def_answer.strip():
-            return {"answer": def_answer + source_line}
-
-    # 4. Compile context from the primary document
-    primary_context = "\n\n".join(c.text for c in primary_chunks[:6])
-
-    groq_client = get_groq_client()
-    if groq_client:
-        system = (
-            "You are DocuAI, an intelligent document QA assistant. "
-            "Answer using ONLY the provided document context. Be comprehensive, precise, and faithful. "
-            "If the question asks for functions or specific points, include all points clearly without omitting later ones. "
-            "If the question asks for a definition or meaning, explain the concept accurately without diverting into unrelated sections. "
-            "If the context does not contain the answer, state that clearly."
-        )
-        user = f"Context from '{doc_title}':\n{primary_context}\n\nQuestion: {req.question}\n\nComplete and accurate answer:"
-        models_to_try = [
-            os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-            "llama-3.1-8b-instant",
-            "gemma2-9b-it",
-        ]
-        for m in models_to_try:
-            try:
-                resp = groq_client.chat.completions.create(
-                    model=m,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user}
-                    ],
-                    temperature=0.1,
-                    max_tokens=4096,
-                )
-                answer = (resp.choices[0].message.content or "").strip()
-                if answer:
+        # 2. Check for high-confidence structured list / heading section strictly within target document
+        best_section = None
+        if is_list_q:
+            doc_chunks = load_document_chunks(db, primary_doc_id)
+            stitched_doc = stitch_chunk_texts(doc_chunks)
+            best_section = select_matching_section(stitched_doc, clean_q)
+            if best_section and best_section.get("points") and best_section["score"] >= 20:
+                answer = format_section_answer(best_section)
+                if answer.strip():
                     return {"answer": answer + source_line}
-            except Exception:
-                continue
 
-    # 5. Fallback when Groq API key is not configured or offline:
-    # Return cleaned passage excerpts from the primary document
-    doc_passages = [clean_definitional_text(load_full_passage(db, c, max_chars=1200), get_subject_terms(req.question)) for c in primary_chunks[:3]]
-    joined_passages = "\n\n".join(p for p in doc_passages if len(p) > 40)
-    return {"answer": f"{joined_passages or primary_context[:3500]}{source_line}"}
+        # 3. Check for high-confidence definitional answer strictly within target document
+        if is_def_q and not is_list_q:
+            doc_chunks = load_document_chunks(db, primary_doc_id)
+            def_answer = extract_definition_answer(db, doc_chunks, clean_q)
+            if def_answer.strip():
+                return {"answer": def_answer + source_line}
+
+        # 4. Compile context from the primary document
+        primary_context = "\n\n".join(c.text for c in primary_chunks[:6])
+
+        groq_client = get_groq_client()
+        if groq_client:
+            system = (
+                "You are DocuAI, an intelligent document QA assistant. "
+                "Answer using ONLY the provided document context. Be comprehensive, precise, and faithful. "
+                "If the question asks for functions or specific points, include all points clearly without omitting later ones. "
+                "If the question asks for a definition or meaning, explain the concept accurately without diverting into unrelated sections. "
+                "If the context does not contain the answer, state that clearly."
+            )
+            user = f"Context from '{doc_title}':\n{primary_context}\n\nQuestion: {clean_q}\n\nComplete and accurate answer:"
+            models_to_try = [
+                os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                "llama-3.1-8b-instant",
+                "gemma2-9b-it",
+            ]
+            for m in models_to_try:
+                try:
+                    resp = groq_client.chat.completions.create(
+                        model=m,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user}
+                        ],
+                        temperature=0.1,
+                        max_tokens=4096,
+                    )
+                    answer = (resp.choices[0].message.content or "").strip()
+                    if answer:
+                        return {"answer": answer + source_line}
+                except Exception:
+                    continue
+
+        # 5. Fallback when Groq API key is not configured or offline:
+        # Return cleaned passage excerpts from the primary document
+        doc_passages = [clean_definitional_text(load_full_passage(db, c, max_chunks=2), get_subject_terms(clean_q)) for c in primary_chunks[:3]]
+        joined_passages = "\n\n".join(p for p in doc_passages if len(p) > 40)
+        return {"answer": f"{joined_passages or primary_context[:3500]}{source_line}"}
+
+    except Exception as e:
+        logger.error(f"Error handling query: {e}", exc_info=True)
+        primary_id = chunks[0].document_id
+        primary_title = chunks[0].title or primary_id
+        safe_text = "\n\n".join(c.text for c in chunks if c.document_id == primary_id)[:2500]
+        return {"answer": f"{safe_text}\n\n📚 Sources: {primary_title}"}
 
 
 @app.get("/documents")

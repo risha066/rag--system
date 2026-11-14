@@ -59,6 +59,13 @@ GROQ_API_KEY=gsk_your_key_here
 
 ### 3. Launch DocuAI
 
+**Option A (1-Click Persistent Background Runner - Windows):**
+- Double-click **`start_docuai.bat`** — Runs a watchdog loop that keeps DocuAI alive continuously and auto-restarts if ever interrupted.
+- Double-click **`run_background.vbs`** — Runs DocuAI completely silently in the background with zero visible terminal windows.
+- Double-click **`enable_autostart.bat`** — Configures DocuAI to boot automatically on Windows startup.
+- Double-click **`stop_docuai.bat`** — Stops the server anytime.
+
+**Option B (Terminal):**
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
