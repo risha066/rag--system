@@ -236,6 +236,10 @@ SLANG_MAP = {
 
 def normalize_question(q: str) -> str:
     res = (q or '').strip()
+    # Deduplicate repeated phrase if accidentally pasted twice (e.g. ABCABC)
+    m_rep = re.match(r'^(.{6,})\1+$', res, re.I)
+    if m_rep:
+        res = m_rep.group(1).strip()
     for pattern, repl in SLANG_MAP.items():
         res = re.sub(pattern, repl, res, flags=re.I)
     return res
@@ -596,6 +600,13 @@ def format_table_and_sections(text: str) -> str:
         text = re.sub(r'A\.\s*In the Plural Sense:\s*', r'\n\n**A. In the Plural Sense:**\n', text)
         text = re.sub(r'B\.\s*In the Singular Sense:\s*', r'\n\n**B. In the Singular Sense:**\n', text)
 
+    # 3. Format Stages of Smart Supply Chain if present
+    if "stages of smart supply chain" in text.lower() or "phases of ssc" in text.lower():
+        text = re.sub(r'(?:5\.10\s+)?STAGES OF SMART SUPPLY CHAIN DEVELOPMENT\s*', '### 5.10 Stages of Smart Supply Chain Development\n\n', text, flags=re.I)
+        text = re.sub(r'the early phase,\s*which involves', r'\n\n- **Early Phase:** Involves', text, flags=re.I)
+        text = re.sub(r';\s*the intermediate phase,\s*which involves', r'\n- **Intermediate Phase:** Involves', text, flags=re.I)
+        text = re.sub(r';\s*and\s*the advanced phase,\s*which is characterised by', r'\n- **Advanced Phase:** Characterised by', text, flags=re.I)
+
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -605,10 +616,10 @@ def clean_definitional_text(text: str, terms: list) -> str:
     cleaned = re.sub(r'\d+\s*\|\s*P\s*a\s*g\s*e', '', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
 
-    # Try finding subject heading start
+    # Try finding subject heading start (including numbered sections like 5.10 or 1.1)
     found_start = None
     for t in terms:
-        pattern = r'(\b(?:\d+\.\d+\s+)?(?:WHAT IS|DEFINING|MEANING OF|DEFINITION OF|INTRODUCTION TO)\s+' + re.escape(t) + r'[A-Za-z0-9 ,/:\-]*\b.*)'
+        pattern = r'(\b(?:\d+\.\d+(?:\.\d+)?\s+)?(?:WHAT IS|DEFINING|MEANING OF|DEFINITION OF|INTRODUCTION TO|STAGES OF|PHASES OF|TYPES OF|FUNCTIONS OF|LIMITATIONS OF|BENEFITS OF|ADVANTAGES OF|COMPONENTS OF)?\s*[A-Za-z0-9 ,/:\-]*\b' + re.escape(t) + r'[A-Za-z0-9 ,/:\-]*\b.*)'
         m = re.search(pattern, cleaned, re.I)
         if m:
             found_start = m.start(1)
@@ -624,8 +635,8 @@ def clean_definitional_text(text: str, terms: list) -> str:
                 cleaned = m.group(1).strip()
                 break
 
-    # Look for clean boundary stop before next sub-topic (e.g. 1.1.1 or Stages of Investigations)
-    m_sub = re.search(r'\b(?:1\.1\.1\b|Stages of Investigations:|\bChapter\s+\d+\b)', cleaned)
+    # Look for clean boundary stop before next sub-topic (e.g. 1.1.1, 5.11, or Stages of Investigations)
+    m_sub = re.search(r'\b(?:1\.1\.1\b|5\.11\b|Stages of Investigations:|\bChapter\s+\d+\b)', cleaned)
     if m_sub and m_sub.start() > 200:
         cleaned = cleaned[:m_sub.start()].strip()
     elif len(cleaned) > 2200:
@@ -646,9 +657,9 @@ def extract_definition_answer(db: Session, primary_chunks, question: str) -> str
         txt = c.text or ''
         sc = 0
         for t in terms:
-            if re.search(r'\b(?:what is|defining|meaning of|definition of|introduction to)\s+' + re.escape(t) + r'\b', txt, re.I):
+            if re.search(r'\b(?:what is|defining|meaning of|definition of|introduction to|stages of|phases of|types of|benefits of)\s+' + re.escape(t) + r'\b', txt, re.I):
                 sc += 35
-            if re.search(r'\b' + re.escape(t) + r'\s+(?:is defined as|refers to|means|is a technology|is a branch|is considered|encompasses)\b', txt, re.I):
+            if re.search(r'\b' + re.escape(t) + r'\s+(?:is defined as|refers to|means|is a technology|is a branch|is considered|encompasses|development)\b', txt, re.I):
                 sc += 25
             if re.search(r'\b' + re.escape(t) + r'\s*\([^)]*\)\s+is\b', txt, re.I):
                 sc += 25
@@ -673,9 +684,10 @@ def semantic_search(db: Session, question: str, top_k: int = 15):
     if not chunks:
         return []
 
-    expanded_q = expand_query(question)
+    clean_q = normalize_question(question)
+    expanded_q = expand_query(clean_q)
     q_vec = embed(expanded_q)
-    q_clean = question.lower().strip()
+    q_clean = clean_q.lower().strip()
     q_words = [w.lower() for w in re.findall(r"\b\w+\b", expanded_q) if len(w) >= 2 and w not in STOP_WORDS]
 
     scored = []
@@ -689,24 +701,30 @@ def semantic_search(db: Session, question: str, top_k: int = 15):
             # 1. Exact phrase & acronym boost
             phrase_boost = 0.0
             if q_clean in c_text_lower:
-                phrase_boost += 1.5
+                phrase_boost += 2.5
             if "artificial intelligence" in c_text_lower and "ai" in q_clean:
                 phrase_boost += 1.0
 
-            sec_sc = score_section(question, c_text_lower[:220], c_text_lower[:400])
-            if sec_sc > 0:
-                phrase_boost += 0.15 * sec_sc
-            elif sec_sc < -20:
-                phrase_boost -= 0.5
+            # Subphrase match boost for multi-word queries
+            words = q_clean.split()
+            if len(words) >= 3:
+                for length in range(len(words), 2, -1):
+                    for start in range(len(words) - length + 1):
+                        subphrase = " ".join(words[start:start+length])
+                        if subphrase in c_text_lower:
+                            phrase_boost += 0.5 * length
+                            break
+                    if phrase_boost > 0:
+                        break
 
-            # Definitional boost for what is / definition questions
-            if bool(DEFINITION_Q_RE.search(question)):
-                if any(k in c_text_lower for k in ["meaning:", "definition:", "is defined as", "refers to", "derived from", "concept of", "defining"]):
+            # 2. Definitional boost
+            if bool(DEFINITION_Q_RE.search(clean_q)):
+                if any(k in c_text_lower for k in ["meaning:", "definition:", "is defined as", "refers to", "derived from", "concept of", "defining", "stages of"]):
                     phrase_boost += 0.8
 
-            # 2. Keyword boost using word boundaries
+            # 3. Keyword boost using word boundaries
             kw_hits = sum(1 for w in q_words if re.search(r'\b' + re.escape(w) + r'\b', c_text_lower))
-            word_boost = (kw_hits / max(len(q_words), 1)) * 0.4
+            word_boost = (kw_hits / max(len(q_words), 1)) * 0.8
 
             total = sim + phrase_boost + word_boost
             scored.append((total, c))
@@ -980,7 +998,10 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
 
         # 5. Fallback when Groq API key is not configured or offline:
         # Return cleaned passage excerpts from the primary document
-        doc_passages = [clean_definitional_text(load_full_passage(db, c, max_chunks=2), get_subject_terms(clean_q)) for c in primary_chunks[:3]]
+        doc_passages = [clean_definitional_text(load_full_passage(db, c, max_chunks=3), get_subject_terms(clean_q)) for c in primary_chunks[:3]]
+        # If top passage is comprehensive and directly matches, return it for maximum precision
+        if doc_passages and len(doc_passages[0].strip()) > 250:
+            return {"answer": f"{doc_passages[0].strip()}{source_line}"}
         joined_passages = "\n\n".join(p for p in doc_passages if len(p) > 40)
         return {"answer": f"{joined_passages or primary_context[:3500]}{source_line}"}
 
