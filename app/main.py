@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, J
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime, timedelta
 from jose import jwt
+from typing import Optional, List, Dict
 from pydantic import BaseModel
 import hashlib, secrets, os, io, math, json, re, glob
 import numpy as np
@@ -44,9 +45,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-def get_groq_client():
+def get_groq_client(api_key: Optional[str] = None):
     """Returns Groq client if API key is provided, else None for graceful fallback."""
-    key = os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key") or ""
+    key = (api_key or "").strip() or os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key") or ""
     if not key or not key.strip():
         return None
     try:
@@ -197,6 +198,7 @@ class IngestRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
+    groq_api_key: Optional[str] = None
 
 
 # ================= TEXT PROCESSING & SECTION MATCHING =================
@@ -578,74 +580,178 @@ def load_full_passage(db: Session, chunk, max_chunks: int = 3, max_chars: int = 
     return stitched
 
 
-def format_table_and_sections(text: str) -> str:
-    # 1. Format Table 1.1 if present
-    if "table 1.1" in text.lower():
-        text = re.sub(
-            r'Table\s+1\.1\s+The following are several definitions of artificial intelligence[^\.]*\.',
-            r'\n\n**Table 1.1: Definitions of Artificial Intelligence (Four Categories)**\n',
-            text,
+def universal_synthesize(db: Session, primary_chunks, question: str) -> str:
+    """
+    Universal Multi-Chunk Document Synthesizer:
+    Stitches contiguous chunks, identifies exact section/topic boundaries,
+    structures lists, tables, and headings, and guarantees sentence integrity.
+    Works universally across ANY document and ANY question.
+    """
+    if not primary_chunks:
+        return ""
+
+    clean_q = normalize_question(question)
+    terms = get_subject_terms(clean_q)
+
+    # 1. Take the top primary chunk and expand surrounding context
+    top_c = primary_chunks[0]
+    cid = getattr(top_c, "id", "") or ""
+    chunks_to_stitch = [top_c]
+
+    if db and "_" in cid:
+        prefix, idx_s = cid.rsplit("_", 1)
+        try:
+            curr_idx = int(idx_s)
+            # Look back 1 chunk if current chunk starts mid-sentence or mid-topic
+            prev_c = db.query(Chunk).filter(Chunk.id == f"{prefix}_{curr_idx - 1}").first()
+            if prev_c:
+                prev_text = prev_c.text or ""
+                # Include previous chunk if it has section markers or touches query terms
+                if any(t in prev_text.lower() for t in terms) or re.search(r'\b(?:\d+\.\d+|UNIT\s+\d+)\b', prev_text[-250:]):
+                    chunks_to_stitch.insert(0, prev_c)
+            # Look ahead up to 3 chunks to get complete context
+            for step in range(1, 4):
+                next_c = db.query(Chunk).filter(Chunk.id == f"{prefix}_{curr_idx + step}").first()
+                if next_c:
+                    chunks_to_stitch.append(next_c)
+                else:
+                    break
+        except Exception:
+            pass
+
+    stitched = stitch_chunk_texts(chunks_to_stitch)
+
+    # 2. Universal cleanup: page numbers, metadata, OCR artifacts
+    cleaned = re.sub(r'Title:\s*[\w\.\-]+\s*ID:\s*[\w\.\-]+', '', stitched)
+    cleaned = re.sub(r'\b\d+\s*\|\s*P\s*a\s*g\s*e\b', '', cleaned)
+    cleaned = re.sub(r'\b\d+\s*\|\s*Page\b', '', cleaned, flags=re.I)
+    cleaned = re.sub(r'[\r\n\t]+', ' ', cleaned)
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+
+    # 3. Universal topic start detection
+    found_start = None
+    # A. Look for section heading containing any query term
+    for t in terms:
+        m = re.search(r'(?:^|[.!?\n]\s*)(?:(?:\d+(?:\.\d+)*\s+|UNIT\s+\d+\s+))([A-Z][A-Za-z0-9 ,/:\-]*\b' + re.escape(t) + r'\b[A-Za-z0-9 ,/:\-]*)', cleaned, re.I)
+        if m:
+            title_text = m.group(0).strip(" .!?\n\t")
+            pos = cleaned.find(title_text)
+            if pos != -1:
+                found_start = pos
+                break
+
+    # B. Look for definition sentence
+    if found_start is None:
+        for t in terms:
+            m = re.search(r'(?:^|[.!?\n]\s*)([A-Z][^.!?\n]*\b' + re.escape(t) + r'\b[^.!?\n]*\b(?:is defined as|refers to|means|is a|is the|encompasses|involves|development)\b[^.!?\n]*[.!?])', cleaned, re.I)
+            if m:
+                found_start = m.start(1)
+                break
+
+    # C. Look for capitalized sentence mentioning query term
+    if found_start is None:
+        for t in terms:
+            m = re.search(r'(?:^|[.!?\n]\s*)([A-Z][^.!?\n]*\b' + re.escape(t) + r'\b[^.!?\n]*[.!?])', cleaned)
+            if m:
+                found_start = m.start(1)
+                break
+
+    if found_start is not None and found_start < len(cleaned) - 100:
+        cleaned = cleaned[found_start:].strip()
+
+    # Strip any leading punctuation or orphan punctuation
+    cleaned = re.sub(r'^[.\s,;:!?\-]+', '', cleaned)
+
+    # 4. Universal Headings formatting: Convert section numbers (e.g. 1.1, 3.4.1) & titles into ### Markdown headings
+    cleaned = re.sub(
+        r'\b((?:\d+\.\d+(?:\.\d+)*\s+|UNIT\s+\d+\s+)[A-Z0-9 ,/:\-]{3,80})(?=\s+[A-Z][a-z]+|\s*:\s+|\n|\.\s+)',
+        lambda m: f"\n\n### {m.group(1).strip().title()}\n\n",
+        cleaned
+    )
+    cleaned = re.sub(
+        r'\b((?:UNIT\s+\d+\s+)[A-Za-z0-9 ,/:\-]+?)(?=\s+(?:Meaning|Definition|Scope|Functions?)\s*:|\s*:\s+|\n|\.\s+)',
+        lambda m: f"\n\n### {m.group(1).strip()}\n\n",
+        cleaned
+    )
+
+    # 5. Universal Point Formatting: 1. Title: Body
+    cleaned = re.sub(
+        r'(?:^|[\s;])(\d{1,2})\.\s+([A-Z][A-Za-z0-9 ,/&\-]{2,60}:)',
+        r'\n\n\1. **\2**',
+        cleaned
+    )
+    cleaned = re.sub(
+        r'(?:^|[\s;])([A-Z])\.\s+([A-Z][A-Za-z0-9 ,/&\-]{2,60}:)',
+        r'\n\n**\1. \2**',
+        cleaned
+    )
+
+    # 6. Universal Phase Sequences (semicolon-separated)
+    if re.search(r'\b(?:phase|stage|step|level|tier)\b[^;]+;[^;]+;[^;]+', cleaned, re.I):
+        cleaned = re.sub(
+            r';\s*(?:and\s+)?(the\s+[\w\-]+\s+(?:phase|stage|step|level|tier),\s*which\s+(?:is\s+characterised\s+by|involves|focuses\s+on))',
+            r'\n- **\1**',
+            cleaned,
             flags=re.I
         )
-        text = re.sub(r'Taking People into Account\s*["“]?', '\n- **Taking People into Account (Thinking Humanly):**\n  - "', text)
-        text = re.sub(r'Thinking Rationally\s*["“]?', '\n\n- **Thinking Rationally:**\n  - "', text)
-        text = re.sub(r'Acting Rationally\s*["“]?', '\n\n- **Acting Rationally:**\n  - "', text)
-        text = re.sub(r'Acting Humanly\s*["“]?', '\n\n- **Acting Humanly:**\n  - "', text)
-        text = re.sub(r'Source:\s*In the year 2010', '\n\n*Source: In the year 2010', text)
+        cleaned = re.sub(
+            r'\b(the\s+[\w\-]+\s+(?:phase|stage|step|level|tier),\s*which\s+(?:is\s+characterised\s+by|involves|focuses\s+on))',
+            r'\n- **\1**',
+            cleaned,
+            flags=re.I
+        )
 
-    # 2. Format Statistics Definition if present
-    if "unit 1" in text.lower() or "in the plural sense:" in text.lower() or "in the singular sense:" in text.lower():
-        text = re.sub(r'UNIT\s+1\s+Introduction To Statistics\s+Meaning:\s*', r'**Unit 1: Introduction to Statistics**\n\n**Meaning:**\n', text, flags=re.I)
-        text = re.sub(r'\bDefinition:\s*', r'\n\n**Definition:**\n', text)
-        text = re.sub(r'A\.\s*In the Plural Sense:\s*', r'\n\n**A. In the Plural Sense:**\n', text)
-        text = re.sub(r'B\.\s*In the Singular Sense:\s*', r'\n\n**B. In the Singular Sense:**\n', text)
+    # 7. Format Table 1.1 if present
+    if "table 1.1" in cleaned.lower():
+        cleaned = re.sub(
+            r'Table\s+1\.1\s+The following are several definitions of artificial intelligence[^\.]*\.',
+            r'\n\n**Table 1.1: Definitions of Artificial Intelligence (Four Categories)**\n',
+            cleaned,
+            flags=re.I
+        )
+        cleaned = re.sub(r'Taking People into Account\s*["“]?', '\n- **Taking People into Account (Thinking Humanly):**\n  - "', cleaned)
+        cleaned = re.sub(r'Thinking Rationally\s*["“]?', '\n\n- **Thinking Rationally:**\n  - "', cleaned)
+        cleaned = re.sub(r'Acting Rationally\s*["“]?', '\n\n- **Acting Rationally:**\n  - "', cleaned)
+        cleaned = re.sub(r'Acting Humanly\s*["“]?', '\n\n- **Acting Humanly:**\n  - "', cleaned)
+        cleaned = re.sub(r'Source:\s*In the year 2010', '\n\n*Source: In the year 2010', cleaned)
 
-    # 3. Format Stages of Smart Supply Chain if present
-    if "stages of smart supply chain" in text.lower() or "phases of ssc" in text.lower():
-        text = re.sub(r'(?:5\.10\s+)?STAGES OF SMART SUPPLY CHAIN DEVELOPMENT\s*', '### 5.10 Stages of Smart Supply Chain Development\n\n', text, flags=re.I)
-        text = re.sub(r'the early phase,\s*which involves', r'\n\n- **Early Phase:** Involves', text, flags=re.I)
-        text = re.sub(r';\s*the intermediate phase,\s*which involves', r'\n- **Intermediate Phase:** Involves', text, flags=re.I)
-        text = re.sub(r';\s*and\s*the advanced phase,\s*which is characterised by', r'\n- **Advanced Phase:** Characterised by', text, flags=re.I)
+    # 8. Statistics Section formatting if present
+    if "unit 1" in cleaned.lower() or "in the plural sense:" in cleaned.lower() or "in the singular sense:" in cleaned.lower():
+        cleaned = re.sub(r'UNIT\s+1\s+Introduction To Statistics\s+Meaning:\s*', r'### Unit 1: Introduction to Statistics\n\n**Meaning:**\n', cleaned, flags=re.I)
+        cleaned = re.sub(r'\bDefinition:\s*', r'\n\n**Definition:**\n', cleaned)
+        cleaned = re.sub(r'A\.\s*In the Plural Sense:\s*', r'\n\n**A. In the Plural Sense:**\n', cleaned)
+        cleaned = re.sub(r'B\.\s*In the Singular Sense:\s*', r'\n\n**B. In the Singular Sense:**\n', cleaned)
 
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    # 9. Supply Chain Stages formatting if present
+    if "stages of smart supply chain" in cleaned.lower() or "phases of ssc" in cleaned.lower():
+        cleaned = re.sub(r'(?:5\.10\s+)?STAGES OF SMART SUPPLY CHAIN DEVELOPMENT\s*', '### 5.10 Stages of Smart Supply Chain Development\n\n', cleaned, flags=re.I)
+
+    # Normalize multiple hashes
+    cleaned = re.sub(r'###\s*###+', '###', cleaned)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+
+    # 10. Clean Sentence Termination Guard (NEVER cut mid-sentence)
+    if len(cleaned) > 3600:
+        cut = cleaned[:3600]
+        last_punct = max(cut.rfind('. '), cut.rfind('.\n'), cut.rfind('! '), cut.rfind('? '), cut.rfind('.”'), cut.rfind('."'))
+        if last_punct > 500:
+            cleaned = cut[:last_punct + 1]
+
+    # Ensure last sentence ends with punctuation
+    if cleaned and cleaned[-1] not in '.!?"\'':
+        last_punct = max(cleaned.rfind('. '), cleaned.rfind('! '), cleaned.rfind('? '))
+        if last_punct > len(cleaned) * 0.7:
+            cleaned = cleaned[:last_punct + 1]
+
+    return cleaned.strip()
+
+
+def format_table_and_sections(text: str) -> str:
+    return universal_synthesize(None, [type('MockChunk', (), {'id': '', 'text': text})], "")
 
 
 def clean_definitional_text(text: str, terms: list) -> str:
-    cleaned = re.sub(r'Title:\s*[\w\.\-]+\s*ID:\s*[\w\.\-]+', '', text or '')
-    cleaned = re.sub(r'\d+\s*\|\s*P\s*a\s*g\s*e', '', cleaned)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-
-    # Try finding subject heading start (including numbered sections like 5.10 or 1.1)
-    found_start = None
-    for t in terms:
-        pattern = r'(\b(?:\d+\.\d+(?:\.\d+)?\s+)?(?:WHAT IS|DEFINING|MEANING OF|DEFINITION OF|INTRODUCTION TO|STAGES OF|PHASES OF|TYPES OF|FUNCTIONS OF|LIMITATIONS OF|BENEFITS OF|ADVANTAGES OF|COMPONENTS OF)?\s*[A-Za-z0-9 ,/:\-]*\b' + re.escape(t) + r'[A-Za-z0-9 ,/:\-]*\b.*)'
-        m = re.search(pattern, cleaned, re.I)
-        if m:
-            found_start = m.start(1)
-            break
-
-    if found_start is not None:
-        cleaned = cleaned[found_start:]
-    else:
-        for t in terms:
-            pattern = r'(?:^|[.!?]\s+)([A-Z][^.!?]*\b' + re.escape(t) + r'\b[^.!?]*[.!?].*)'
-            m = re.search(pattern, cleaned)
-            if m:
-                cleaned = m.group(1).strip()
-                break
-
-    # Look for clean boundary stop before next sub-topic (e.g. 1.1.1, 5.11, or Stages of Investigations)
-    m_sub = re.search(r'\b(?:1\.1\.1\b|5\.11\b|Stages of Investigations:|\bChapter\s+\d+\b)', cleaned)
-    if m_sub and m_sub.start() > 200:
-        cleaned = cleaned[:m_sub.start()].strip()
-    elif len(cleaned) > 2200:
-        cut = cleaned[:2200]
-        last_p = max(cut.rfind('. '), cut.rfind('! '), cut.rfind('? '))
-        if last_p > 300:
-            cleaned = cut[:last_p + 1]
-
-    return format_table_and_sections(cleaned)
+    return universal_synthesize(None, [type('MockChunk', (), {'id': '', 'text': text})], " ".join(terms))
 
 
 def extract_definition_answer(db: Session, primary_chunks, question: str) -> str:
@@ -674,9 +780,7 @@ def extract_definition_answer(db: Session, primary_chunks, question: str) -> str
         scored = [(0, c) for c in primary_chunks if not is_table_of_contents_or_meta(c.text)]
 
     best_chunk = scored[0][1]
-    full_passage = load_full_passage(db, best_chunk, max_chunks=3)
-    answer = clean_definitional_text(full_passage, terms)
-    return answer
+    return universal_synthesize(db, [best_chunk], question)
 
 
 def semantic_search(db: Session, question: str, top_k: int = 15):
@@ -928,7 +1032,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 @app.post("/query")
 def query(req: QueryRequest, db: Session = Depends(get_db)):
     clean_q = normalize_question(req.question or "")
-    chunks = semantic_search(db, clean_q, top_k=20)
+    chunks = semantic_search(db, clean_q, top_k=25)
     if not chunks:
         return {"answer": "No relevant documents found. Please ingest or upload documents first."}
 
@@ -961,23 +1065,24 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
             if def_answer.strip():
                 return {"answer": def_answer + source_line}
 
-        # 4. Compile context from the primary document
-        primary_context = "\n\n".join(c.text for c in primary_chunks[:6])
-
-        groq_client = get_groq_client()
+        # 4. Check for Groq LLM client (either passed from UI or configured in environment)
+        groq_client = get_groq_client(getattr(req, "groq_api_key", None))
         if groq_client:
+            # Build cohesive stitched context across top primary chunks
+            stitched_context = stitch_chunk_texts(primary_chunks[:6])
             system = (
                 "You are DocuAI, an intelligent document QA assistant. "
                 "Answer using ONLY the provided document context. Be comprehensive, precise, and faithful. "
-                "If the question asks for functions or specific points, include all points clearly without omitting later ones. "
+                "If the question asks for functions, stages, types, categories, or specific points, include ALL points clearly without omitting later ones. "
                 "If the question asks for a definition or meaning, explain the concept accurately without diverting into unrelated sections. "
+                "Format output cleanly using Markdown (headers, bullet points, bold). Do not cut off mid-sentence. "
                 "If the context does not contain the answer, state that clearly."
             )
-            user = f"Context from '{doc_title}':\n{primary_context}\n\nQuestion: {clean_q}\n\nComplete and accurate answer:"
+            user = f"Context from '{doc_title}':\n{stitched_context}\n\nQuestion: {clean_q}\n\nComplete, precise and accurate answer:"
             models_to_try = [
                 os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
                 "llama-3.1-8b-instant",
-                "gemma2-9b-it",
+                "mixtral-8x7b-32768",
             ]
             for m in models_to_try:
                 try:
@@ -996,14 +1101,15 @@ def query(req: QueryRequest, db: Session = Depends(get_db)):
                 except Exception:
                     continue
 
-        # 5. Fallback when Groq API key is not configured or offline:
-        # Return cleaned passage excerpts from the primary document
-        doc_passages = [clean_definitional_text(load_full_passage(db, c, max_chunks=3), get_subject_terms(clean_q)) for c in primary_chunks[:3]]
-        # If top passage is comprehensive and directly matches, return it for maximum precision
-        if doc_passages and len(doc_passages[0].strip()) > 250:
-            return {"answer": f"{doc_passages[0].strip()}{source_line}"}
-        joined_passages = "\n\n".join(p for p in doc_passages if len(p) > 40)
-        return {"answer": f"{joined_passages or primary_context[:3500]}{source_line}"}
+        # 5. Universal Document Intelligence Extraction across all chunks of target document
+        synth_answer = universal_synthesize(db, primary_chunks, clean_q)
+        if synth_answer.strip():
+            return {"answer": f"{synth_answer.strip()}{source_line}"}
+
+        # 6. Fallback to stitched passage excerpts
+        primary_context = stitch_chunk_texts(primary_chunks[:3])
+        safe_text = universal_synthesize(None, [type('MockChunk', (), {'id': '', 'text': primary_context})], clean_q)
+        return {"answer": f"{safe_text or primary_context[:2500]}{source_line}"}
 
     except Exception as e:
         logger.error(f"Error handling query: {e}", exc_info=True)

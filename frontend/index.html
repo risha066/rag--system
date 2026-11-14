@@ -397,9 +397,15 @@ footer a { color: var(--primary); text-decoration: none; font-weight: 500; }
         <p>Intelligent Document Intelligence & RAG System</p>
       </div>
     </div>
-    <div class="api-badge" onclick="promptCustomApi()" title="Click to view or edit backend API URL">
-      <span style="font-size: 10px;">🟢</span>
-      <span id="apiHostDisplay">API: localhost:8000</span>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <div class="api-badge" id="groqBadge" onclick="promptGroqKey()" title="Configure Groq LLM (Optional Free API Key)" style="cursor: pointer; background: #fef3c7; color: #92400e; border-color: #fde68a;">
+        <span id="groqStatusIcon">⚡</span>
+        <span id="groqStatusText">LLM: Fast Local</span>
+      </div>
+      <div class="api-badge" onclick="promptCustomApi()" title="Click to view or edit backend API URL">
+        <span style="font-size: 10px;">🟢</span>
+        <span id="apiHostDisplay">API: localhost:8000</span>
+      </div>
     </div>
   </header>
 
@@ -498,6 +504,48 @@ function updateApiBadge() {
   }
 }
 updateApiBadge();
+
+function updateGroqBadge() {
+  const badge = document.getElementById('groqBadge');
+  const icon = document.getElementById('groqStatusIcon');
+  const text = document.getElementById('groqStatusText');
+  if (!badge) return;
+  const key = localStorage.getItem('groq_api_key');
+  if (key && key.trim()) {
+    badge.style.background = '#dcfce7';
+    badge.style.color = '#15803d';
+    badge.style.borderColor = '#86efac';
+    if (icon) icon.innerText = '⚡';
+    if (text) text.innerText = 'LLM: Groq AI';
+  } else {
+    badge.style.background = '#fef3c7';
+    badge.style.color = '#92400e';
+    badge.style.borderColor = '#fde68a';
+    if (icon) icon.innerText = '⚡';
+    if (text) text.innerText = 'LLM: Fast Local';
+  }
+}
+updateGroqBadge();
+
+function promptGroqKey() {
+  const current = localStorage.getItem('groq_api_key') || '';
+  const input = prompt(
+    "Configure Groq LLM (Optional Free Key)\n\n" +
+    "Enter your free Groq API Key (gsk_...) from https://console.groq.com/keys for instant, complete LLM synthesis across all chunks.\n\n" +
+    "Leave empty to use the built-in fast local offline extractor:\n",
+    current
+  );
+  if (input !== null) {
+    if (input.trim()) {
+      localStorage.setItem('groq_api_key', input.trim());
+      alert("Groq AI Key saved! DocuAI will now use high-speed Groq LLaMA models to synthesize all document answers.");
+    } else {
+      localStorage.removeItem('groq_api_key');
+      alert("Groq Key cleared. DocuAI will use the local Universal Document Understanding Engine.");
+    }
+    updateGroqBadge();
+  }
+}
 
 function promptCustomApi() {
   const current = localStorage.getItem('docuai_api_url') || API;
@@ -830,7 +878,8 @@ async function submitChatQuery() {
   box.scrollTop = box.scrollHeight;
 
   try {
-    const res = await apiCall('/query', 'POST', { question: q });
+    const groqKey = localStorage.getItem('groq_api_key') || '';
+    const res = await apiCall('/query', 'POST', { question: q, groq_api_key: groqKey });
     const loader = document.getElementById(loadingId);
     if (loader) loader.remove();
 
@@ -844,15 +893,90 @@ async function submitChatQuery() {
   }
 }
 
+function renderMarkdown(md) {
+  if (!md) return '';
+  const lines = md.split('\n');
+  let html = '';
+  let inUl = false;
+  let inOl = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
+
+    if (!line) {
+      if (inUl) { html += '</ul>'; inUl = false; }
+      if (inOl) { html += '</ol>'; inOl = false; }
+      continue;
+    }
+
+    // Headers: ###, ##, #
+    if (line.startsWith('### ')) {
+      if (inUl) { html += '</ul>'; inUl = false; }
+      if (inOl) { html += '</ol>'; inOl = false; }
+      html += `<h4 style="margin: 14px 0 6px 0; font-weight: 700; color: var(--text-main); font-size: 15px;">${formatInline(line.slice(4))}</h4>`;
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      if (inUl) { html += '</ul>'; inUl = false; }
+      if (inOl) { html += '</ol>'; inOl = false; }
+      html += `<h3 style="margin: 16px 0 8px 0; font-weight: 700; color: var(--text-main); font-size: 16px;">${formatInline(line.slice(3))}</h3>`;
+      continue;
+    }
+
+    // Numbered list item: 1. Item
+    const numMatch = line.match(/^(\d{1,2})\.\s+(.+)$/);
+    if (numMatch) {
+      if (inUl) { html += '</ul>'; inUl = false; }
+      if (!inOl) { html += '<ol style="margin: 8px 0 12px 22px; padding-left: 0; line-height: 1.6;">'; inOl = true; }
+      html += `<li style="margin-bottom: 6px;">${formatInline(numMatch[2])}</li>`;
+      continue;
+    }
+
+    // Bullet list item: - Item or * Item
+    const bulletMatch = line.match(/^[-*•]\s+(.+)$/);
+    if (bulletMatch) {
+      if (inOl) { html += '</ol>'; inOl = false; }
+      if (!inUl) { html += '<ul style="margin: 8px 0 12px 20px; padding-left: 0; line-height: 1.6;">'; inUl = true; }
+      html += `<li style="margin-bottom: 6px;">${formatInline(bulletMatch[1])}</li>`;
+      continue;
+    }
+
+    // Regular line / paragraph
+    if (inUl) { html += '</ul>'; inUl = false; }
+    if (inOl) { html += '</ol>'; inOl = false; }
+    html += `<p style="margin-bottom: 8px; line-height: 1.6;">${formatInline(line)}</p>`;
+  }
+
+  if (inUl) html += '</ul>';
+  if (inOl) html += '</ol>';
+  return html;
+}
+
+function formatInline(text) {
+  let escaped = escapeHtml(text);
+  // Bold: **text**
+  escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic: *text*
+  escaped = escaped.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  // Inline code: `code`
+  escaped = escaped.replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,0.06); padding:2px 5px; border-radius:4px; font-size:12px;">$1</code>');
+  return escaped;
+}
+
 function formatBotAnswer(raw) {
-  // Check for source tag
+  if (!raw) return 'No answer generated';
+  let mainText = raw;
+  let sources = '';
   if (raw.includes('📚 Sources:')) {
     const parts = raw.split('📚 Sources:');
-    const mainText = parts[0].trim();
-    const sources = parts[1].trim();
-    return escapeHtml(mainText) + `<span class="source-tag">📚 <strong>Sources:</strong> ${escapeHtml(sources)}</span>`;
+    mainText = parts[0].trim();
+    sources = parts[1].trim();
   }
-  return escapeHtml(raw);
+  const rendered = renderMarkdown(mainText);
+  if (sources) {
+    return rendered + `<div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed var(--border);"><span class="source-tag" style="background:var(--primary-light); color:var(--primary); padding:4px 10px; border-radius:8px; font-size:12px; font-weight:500;">📚 <strong>Sources:</strong> ${escapeHtml(sources)}</span></div>`;
+  }
+  return rendered;
 }
 
 // ---- 4. DOCUMENTS VIEW ----
